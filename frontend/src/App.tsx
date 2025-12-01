@@ -4,7 +4,9 @@ function App() {
   const [message, setMessage] = useState('Loading...');
 
   useEffect(() => {
-    fetch('http://localhost:8000/')
+    const apiUrl = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:8000`;
+
+    fetch(`${apiUrl}/`)
       .then((res) => res.json())
       .then((data) => setMessage(data.message))
       .catch(() => setMessage('Error connecting to API'));
