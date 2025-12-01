@@ -30,4 +30,5 @@ jobs:
           script: |
             cd /app/fb-leads
             docker compose down || true
+            docker builder prune -f
             docker compose up -d --build
