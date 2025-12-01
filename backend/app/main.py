@@ -14,7 +14,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"message": "Hello from FB Leads API!"}
+    return {"message": "Hello from FB Leads API! With new deploy."}
 
 
 @app.get("/health")
