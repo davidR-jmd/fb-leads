@@ -52,3 +52,8 @@ class IUserRepository(ABC):
     async def get_by_id(self, user_id: str) -> dict[str, Any] | None:
         """Get user by ID."""
         pass
+
+    @abstractmethod
+    async def count(self) -> int:
+        """Count total users."""
+        pass

@@ -7,6 +7,7 @@ from app.auth.exceptions import (
     InvalidCredentialsError,
     InvalidTokenError,
 )
+from app.users.model import UserRole
 
 
 @pytest.fixture
@@ -50,6 +51,7 @@ async def test_register_creates_user_with_hashed_password(
 ):
     """Test that register hashes password and creates user."""
     mock_user_repository.get_by_email.return_value = None
+    mock_user_repository.count.return_value = 1  # Not first user
     mock_user_repository.create.return_value = {
         "_id": "user_id",
         "email": "test@example.com",
@@ -68,6 +70,66 @@ async def test_register_creates_user_with_hashed_password(
     mock_password_hasher.hash.assert_called_once_with("plainpassword")
     mock_user_repository.create.assert_called_once()
     assert result["email"] == "test@example.com"
+
+
+@pytest.mark.asyncio
+async def test_first_user_becomes_admin(
+    auth_service, mock_user_repository, mock_password_hasher
+):
+    """Test that first registered user becomes admin and is auto-approved."""
+    mock_user_repository.get_by_email.return_value = None
+    mock_user_repository.count.return_value = 0  # First user
+    mock_user_repository.create.return_value = {
+        "_id": "user_id",
+        "email": "first@example.com",
+        "full_name": "First User",
+        "hashed_password": "hashed_password",
+        "role": UserRole.ADMIN.value,
+        "is_approved": True,
+        "is_active": True,
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+
+    await auth_service.register(
+        email="first@example.com",
+        password="password123",
+        full_name="First User",
+    )
+
+    # Verify create was called with admin role and is_approved=True
+    create_call = mock_user_repository.create.call_args[0][0]
+    assert create_call["role"] == UserRole.ADMIN.value
+    assert create_call["is_approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_subsequent_user_is_not_admin(
+    auth_service, mock_user_repository, mock_password_hasher
+):
+    """Test that subsequent users are not admin and require approval."""
+    mock_user_repository.get_by_email.return_value = None
+    mock_user_repository.count.return_value = 1  # Not first user
+    mock_user_repository.create.return_value = {
+        "_id": "user_id",
+        "email": "second@example.com",
+        "full_name": "Second User",
+        "hashed_password": "hashed_password",
+        "role": UserRole.USER.value,
+        "is_approved": False,
+        "is_active": True,
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+
+    await auth_service.register(
+        email="second@example.com",
+        password="password123",
+        full_name="Second User",
+    )
+
+    # Verify create was called with user role and is_approved=False
+    create_call = mock_user_repository.create.call_args[0][0]
+    assert create_call["role"] == UserRole.USER.value
+    assert create_call["is_approved"] is False
 
 
 @pytest.mark.asyncio

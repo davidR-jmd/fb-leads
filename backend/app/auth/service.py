@@ -30,16 +30,22 @@ class AuthService:
         password: str,
         full_name: str,
     ) -> dict[str, Any]:
-        """Register a new user."""
+        """Register a new user. First user becomes admin and is auto-approved."""
         existing_user = await self._user_repository.get_by_email(email)
         if existing_user:
             raise UserAlreadyExistsError(email)
+
+        # First user becomes admin and is auto-approved
+        user_count = await self._user_repository.count()
+        is_first_user = user_count == 0
 
         hashed_password = self._password_hasher.hash(password)
         user_document = create_user_document(
             email=email,
             hashed_password=hashed_password,
             full_name=full_name,
+            role=UserRole.ADMIN if is_first_user else UserRole.USER,
+            is_approved=is_first_user,
         )
 
         return await self._user_repository.create(user_document)

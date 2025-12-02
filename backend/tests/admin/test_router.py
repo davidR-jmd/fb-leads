@@ -157,8 +157,11 @@ async def test_update_user_role(test_client, mock_db, admin_data, user_data):
 
 
 @pytest.mark.asyncio
-async def test_unapproved_user_cannot_login(test_client, user_data):
+async def test_unapproved_user_cannot_login(test_client, mock_db, admin_data, user_data):
     """Test that unapproved users cannot login."""
+    # First create admin (first user is auto-approved)
+    await create_admin_and_login(test_client, mock_db, admin_data)
+    # Then create regular user (will be unapproved)
     await create_user(test_client, user_data)
 
     response = await test_client.post(

@@ -27,6 +27,10 @@ class UserRepository(IUserRepository):
         except Exception:
             return None
 
+    async def count(self) -> int:
+        """Count total users."""
+        return await self._collection.count_documents({})
+
     async def get_pending_users(self) -> list[dict[str, Any]]:
         """Get all users pending approval."""
         cursor = self._collection.find({"is_approved": False})
