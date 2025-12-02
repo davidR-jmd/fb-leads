@@ -1,22 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
+import Layout from './components/layout/Layout';
+import Dashboard from './pages/Dashboard';
+import NouvelleRecherche from './pages/NouvelleRecherche';
+import Historique from './pages/Historique';
+import Configuration from './pages/Configuration';
 
 function App() {
-  const [message, setMessage] = useState('Loading...');
-
-  useEffect(() => {
-    const apiUrl = process.env.REACT_APP_API_URL || `http://${window.location.hostname}:8000`;
-
-    fetch(`${apiUrl}/`)
-      .then((res) => res.json())
-      .then((data) => setMessage(data.message))
-      .catch(() => setMessage('Error connecting to API'));
-  }, []);
-
   return (
-    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
-      <h1>FB Leads</h1>
-      <p>API says: <strong>{message}</strong></p>
-    </div>
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/recherche" element={<NouvelleRecherche />} />
+        <Route path="/historique" element={<Historique />} />
+        <Route path="/configuration" element={<Configuration />} />
+      </Routes>
+    </Layout>
   );
 }
 
