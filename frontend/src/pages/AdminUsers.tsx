@@ -61,6 +61,19 @@ const AdminUsers: React.FC = () => {
     }
   };
 
+  const handleToggleActive = async (user: User) => {
+    const action = user.is_active ? 'désactiver' : 'activer';
+    if (!window.confirm(`Êtes-vous sûr de vouloir ${action} cet utilisateur ?`)) {
+      return;
+    }
+    try {
+      await adminApi.toggleUserActive(user.id);
+      await loadUsers();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || `Erreur lors de la ${action}tion`);
+    }
+  };
+
   const displayUsers = activeTab === 'pending' ? pendingUsers : users;
 
   if (isLoading) {
@@ -130,6 +143,9 @@ const AdminUsers: React.FC = () => {
                   Rôle
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
+                  Approbation
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
                   Statut
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
@@ -182,6 +198,17 @@ const AdminUsers: React.FC = () => {
                       {user.is_approved ? 'Approuvé' : 'En attente'}
                     </span>
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span
+                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                        user.is_active
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}
+                    >
+                      {user.is_active ? 'Actif' : 'Désactivé'}
+                    </span>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                     {new Date(user.created_at).toLocaleDateString('fr-FR', {
                       day: 'numeric',
@@ -206,12 +233,20 @@ const AdminUsers: React.FC = () => {
                         </button>
                       </>
                     ) : (
-                      <button
-                        onClick={() => handleToggleRole(user)}
-                        className="text-slate-600 hover:text-slate-900"
-                      >
-                        {user.role === 'admin' ? 'Retirer admin' : 'Promouvoir admin'}
-                      </button>
+                      <>
+                        <button
+                          onClick={() => handleToggleActive(user)}
+                          className={user.is_active ? 'text-red-600 hover:text-red-900' : 'text-green-600 hover:text-green-900'}
+                        >
+                          {user.is_active ? 'Désactiver' : 'Activer'}
+                        </button>
+                        <button
+                          onClick={() => handleToggleRole(user)}
+                          className="text-slate-600 hover:text-slate-900"
+                        >
+                          {user.role === 'admin' ? 'Retirer admin' : 'Promouvoir admin'}
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>

@@ -7,6 +7,7 @@ from app.auth.exceptions import (
     InvalidCredentialsError,
     InvalidTokenError,
     UserNotApprovedError,
+    UserDeactivatedError,
 )
 
 
@@ -62,6 +63,10 @@ class AuthService:
         # Check if user is approved (admins are always approved)
         if not user.get("is_approved", False) and user.get("role") != UserRole.ADMIN.value:
             raise UserNotApprovedError()
+
+        # Check if user account is active
+        if not user.get("is_active", True):
+            raise UserDeactivatedError()
 
         user_id = str(user["_id"])
         return {

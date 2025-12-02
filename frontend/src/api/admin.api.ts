@@ -31,4 +31,9 @@ export const adminApi = {
   rejectUser: async (userId: string): Promise<void> => {
     await apiClient.post(`/admin/users/${userId}/reject`);
   },
+
+  toggleUserActive: async (userId: string): Promise<User> => {
+    const response = await apiClient.post<User>(`/admin/users/${userId}/toggle-active`);
+    return response.data;
+  },
 };

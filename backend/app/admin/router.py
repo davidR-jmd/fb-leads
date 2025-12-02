@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -18,6 +18,19 @@ def get_user_repository(
     return UserRepository(db)
 
 
+def _user_to_response(user: dict[str, Any]) -> UserResponse:
+    """Convert user document to UserResponse (DRY helper)."""
+    return UserResponse(
+        id=str(user["_id"]),
+        email=user["email"],
+        full_name=user["full_name"],
+        role=user.get("role", "user"),
+        is_active=user["is_active"],
+        is_approved=user.get("is_approved", False),
+        created_at=user["created_at"],
+    )
+
+
 @router.get("/users", response_model=list[UserResponse])
 async def get_all_users(
     _: Annotated[dict, Depends(get_current_admin_user)],
@@ -25,18 +38,7 @@ async def get_all_users(
 ) -> list[UserResponse]:
     """Get all users (admin only)."""
     users = await user_repository.get_all_users()
-    return [
-        UserResponse(
-            id=str(user["_id"]),
-            email=user["email"],
-            full_name=user["full_name"],
-            role=user.get("role", "user"),
-            is_active=user["is_active"],
-            is_approved=user.get("is_approved", False),
-            created_at=user["created_at"],
-        )
-        for user in users
-    ]
+    return [_user_to_response(user) for user in users]
 
 
 @router.get("/users/pending", response_model=list[UserResponse])
@@ -46,18 +48,7 @@ async def get_pending_users(
 ) -> list[UserResponse]:
     """Get all users pending approval (admin only)."""
     users = await user_repository.get_pending_users()
-    return [
-        UserResponse(
-            id=str(user["_id"]),
-            email=user["email"],
-            full_name=user["full_name"],
-            role=user.get("role", "user"),
-            is_active=user["is_active"],
-            is_approved=user.get("is_approved", False),
-            created_at=user["created_at"],
-        )
-        for user in users
-    ]
+    return [_user_to_response(user) for user in users]
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse)
@@ -82,15 +73,7 @@ async def update_user(
             detail="User not found",
         )
 
-    return UserResponse(
-        id=str(user["_id"]),
-        email=user["email"],
-        full_name=user["full_name"],
-        role=user.get("role", "user"),
-        is_active=user["is_active"],
-        is_approved=user.get("is_approved", False),
-        created_at=user["created_at"],
-    )
+    return _user_to_response(user)
 
 
 @router.post("/users/{user_id}/approve", response_model=UserResponse)
@@ -107,15 +90,27 @@ async def approve_user(
             detail="User not found",
         )
 
-    return UserResponse(
-        id=str(user["_id"]),
-        email=user["email"],
-        full_name=user["full_name"],
-        role=user.get("role", "user"),
-        is_active=user["is_active"],
-        is_approved=user.get("is_approved", False),
-        created_at=user["created_at"],
-    )
+    return _user_to_response(user)
+
+
+@router.post("/users/{user_id}/toggle-active", response_model=UserResponse)
+async def toggle_user_active(
+    user_id: str,
+    _: Annotated[dict, Depends(get_current_admin_user)],
+    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
+) -> UserResponse:
+    """Toggle user active status (admin only)."""
+    user = await user_repository.get_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    new_status = not user.get("is_active", True)
+    updated_user = await user_repository.update(user_id, {"is_active": new_status})
+
+    return _user_to_response(updated_user)
 
 
 @router.post("/users/{user_id}/reject", status_code=status.HTTP_204_NO_CONTENT)

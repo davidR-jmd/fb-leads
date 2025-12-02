@@ -38,3 +38,10 @@ class InsufficientPermissionsError(AuthError):
 
     def __init__(self, message: str = "You don't have permission to perform this action") -> None:
         super().__init__(message)
+
+
+class UserDeactivatedError(AuthError):
+    """Raised when user account has been deactivated by admin."""
+
+    def __init__(self) -> None:
+        super().__init__("Your account has been deactivated")

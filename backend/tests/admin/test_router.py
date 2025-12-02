@@ -171,3 +171,97 @@ async def test_unapproved_user_cannot_login(test_client, mock_db, admin_data, us
 
     assert response.status_code == 403
     assert "pending approval" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_user_active_status_deactivate(test_client, mock_db, admin_data, user_data):
+    """Test POST /admin/users/{id}/toggle-active deactivates an active user."""
+    admin_token = await create_admin_and_login(test_client, mock_db, admin_data)
+    created_user = await create_user(test_client, user_data)
+
+    # First approve the user
+    await test_client.post(
+        f"/admin/users/{created_user['id']}/approve",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    # Toggle active status (should deactivate)
+    response = await test_client.post(
+        f"/admin/users/{created_user['id']}/toggle-active",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_user_active_status_reactivate(test_client, mock_db, admin_data, user_data):
+    """Test POST /admin/users/{id}/toggle-active reactivates an inactive user."""
+    admin_token = await create_admin_and_login(test_client, mock_db, admin_data)
+    created_user = await create_user(test_client, user_data)
+
+    # Approve and then deactivate the user
+    await test_client.post(
+        f"/admin/users/{created_user['id']}/approve",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    await test_client.post(
+        f"/admin/users/{created_user['id']}/toggle-active",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    # Toggle again (should reactivate)
+    response = await test_client.post(
+        f"/admin/users/{created_user['id']}/toggle-active",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_deactivated_user_cannot_login(test_client, mock_db, admin_data, user_data):
+    """Test that deactivated users cannot login."""
+    admin_token = await create_admin_and_login(test_client, mock_db, admin_data)
+    await create_user(test_client, user_data)
+
+    # Get user ID from pending users
+    pending_response = await test_client.get(
+        "/admin/users/pending",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    user_id = pending_response.json()[0]["id"]
+
+    # Approve then deactivate
+    await test_client.post(
+        f"/admin/users/{user_id}/approve",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    await test_client.post(
+        f"/admin/users/{user_id}/toggle-active",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    # Try to login
+    response = await test_client.post(
+        "/auth/login",
+        json={"email": user_data["email"], "password": user_data["password"]},
+    )
+
+    assert response.status_code == 403
+    assert "deactivated" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_active_user_not_found(test_client, mock_db, admin_data):
+    """Test POST /admin/users/{id}/toggle-active returns 404 for non-existent user."""
+    admin_token = await create_admin_and_login(test_client, mock_db, admin_data)
+
+    response = await test_client.post(
+        "/admin/users/000000000000000000000000/toggle-active",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    assert response.status_code == 404

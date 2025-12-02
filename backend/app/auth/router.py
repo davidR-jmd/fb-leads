@@ -16,6 +16,7 @@ from app.auth.exceptions import (
     InvalidCredentialsError,
     InvalidTokenError,
     UserNotApprovedError,
+    UserDeactivatedError,
 )
 from app.users.schemas import UserResponse
 
@@ -71,6 +72,11 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account is pending approval by an administrator",
+        )
+    except UserDeactivatedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been deactivated",
         )
 
 
