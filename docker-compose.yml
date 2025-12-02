@@ -1,4 +1,15 @@
 services:
+  mongodb:
+    image: mongo:7
+    container_name: fb-leads-mongodb
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password}
+    volumes:
+      - mongodb_data:/data/db
+
   backend:
     build: ./backend
     container_name: fb-leads-backend
@@ -6,6 +17,12 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    environment:
+      - MONGODB_URL=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-password}@mongodb:27017
+      - MONGODB_DB_NAME=fb_leads
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-key-change-in-production}
+    depends_on:
+      - mongodb
 
   frontend:
     build: ./frontend
@@ -14,6 +31,10 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - frontend_node_modules:/app/node_modules
     depends_on:
       - backend
+
+volumes:
+  mongodb_data:
+  frontend_node_modules:
