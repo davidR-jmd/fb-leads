@@ -37,8 +37,26 @@ export const TRANSLATIONS = {
   // Pages
   pages: {
     newSearch: {
-      title: 'Nouvelle Recherche',
-      placeholder: 'Page de nouvelle recherche - a implementer',
+      title: 'Import & Recherche',
+      steps: {
+        import: 'Import',
+        validation: 'Validation',
+        synchronisation: 'Synchronisation',
+      },
+      back: 'Retour',
+      dropzone: 'Drag on-drop et une mappier en Excel/CSV',
+      columnMapping: 'Mapperment des colomnes',
+      companyName: "Nom de l'entreprise",
+      website: 'Site Web',
+      profile: 'Profil',
+      profiles: {
+        marketingDirector: 'Directeur Marketing',
+        salesDirector: 'Directeur Commercial',
+        ceo: 'PDG / CEO',
+        cto: 'CTO / Directeur Technique',
+        hr: 'DRH / Ressources Humaines',
+      },
+      launchEnrichment: "Lancer l'enrichissement via Lusha",
     },
     history: {
       title: 'Historique',
