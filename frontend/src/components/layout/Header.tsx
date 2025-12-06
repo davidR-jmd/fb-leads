@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, ChevronDown, LogOut, Users, Shield } from 'lucide-react';
+import { Menu, ChevronDown, LogOut, Users, Shield, Linkedin } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 export default function Header() {
@@ -45,14 +45,24 @@ export default function Header() {
               )}
             </div>
             {isAdmin && (
-              <Link
-                to="/admin/users"
-                onClick={() => setShowDropdown(false)}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-              >
-                <Users size={16} />
-                Gestion utilisateurs
-              </Link>
+              <>
+                <Link
+                  to="/admin/users"
+                  onClick={() => setShowDropdown(false)}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <Users size={16} />
+                  Gestion utilisateurs
+                </Link>
+                <Link
+                  to="/admin/linkedin"
+                  onClick={() => setShowDropdown(false)}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <Linkedin size={16} />
+                  Configuration LinkedIn
+                </Link>
+              </>
             )}
             <button
               onClick={() => {

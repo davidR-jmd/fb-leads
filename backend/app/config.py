@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
+    # LinkedIn
+    linkedin_encryption_key: str = "change-this-key-in-production-32"
+    linkedin_browser_profile_path: str = "./browser-profiles/linkedin"
+    linkedin_headless: bool = True  # Set to False to see browser window (for debugging)
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

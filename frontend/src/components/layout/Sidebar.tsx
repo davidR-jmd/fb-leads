@@ -1,8 +1,9 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Search, History, Settings } from 'lucide-react';
+import { LayoutDashboard, Search, History, Settings, Linkedin } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { TRANSLATIONS } from '../../constants/translations';
+import { useAuth } from '../../hooks/useAuth';
 
 /**
  * Navigation item configuration
@@ -11,14 +12,16 @@ import { TRANSLATIONS } from '../../constants/translations';
 interface NavItemConfig {
   path: string;
   icon: React.ReactNode;
-  labelKey: keyof typeof TRANSLATIONS.nav;
+  label: string;
+  adminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItemConfig[] = [
-  { path: '/', icon: <LayoutDashboard size={20} />, labelKey: 'dashboard' },
-  { path: '/recherche', icon: <Search size={20} />, labelKey: 'newSearch' },
-  { path: '/historique', icon: <History size={20} />, labelKey: 'history' },
-  { path: '/configuration', icon: <Settings size={20} />, labelKey: 'settings' },
+  { path: '/', icon: <LayoutDashboard size={20} />, label: TRANSLATIONS.nav.dashboard },
+  { path: '/recherche', icon: <Search size={20} />, label: TRANSLATIONS.nav.newSearch },
+  { path: '/linkedin/search', icon: <Linkedin size={20} />, label: TRANSLATIONS.navExtended.linkedin },
+  { path: '/historique', icon: <History size={20} />, label: TRANSLATIONS.nav.history },
+  { path: '/configuration', icon: <Settings size={20} />, label: TRANSLATIONS.nav.settings },
 ];
 
 /**
@@ -55,6 +58,11 @@ function NavItem({ path, icon, label }: NavItemProps) {
  * Single Responsibility: Only handles sidebar layout and navigation structure
  */
 export default function Sidebar() {
+  const { isAdmin } = useAuth();
+
+  // Filter nav items based on user role
+  const visibleItems = NAV_ITEMS.filter(item => !item.adminOnly || isAdmin);
+
   return (
     <aside className="fixed left-0 top-0 h-full w-56 bg-slate-800 flex flex-col">
       {/* Logo */}
@@ -66,12 +74,12 @@ export default function Sidebar() {
 
       {/* Navigation - DRY: Maps over config instead of repeating JSX */}
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <NavItem
             key={item.path}
             path={item.path}
             icon={item.icon}
-            label={TRANSLATIONS.nav[item.labelKey]}
+            label={item.label}
           />
         ))}
       </nav>

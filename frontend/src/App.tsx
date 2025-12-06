@@ -8,6 +8,8 @@ import NouvelleRecherche from './pages/NouvelleRecherche';
 import Historique from './pages/Historique';
 import Configuration from './pages/Configuration';
 import AdminUsers from './pages/AdminUsers';
+import LinkedInSettings from './pages/LinkedInSettings';
+import LinkedInSearch from './pages/LinkedInSearch';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
@@ -29,11 +31,20 @@ function App() {
                 <Route path="/recherche" element={<NouvelleRecherche />} />
                 <Route path="/historique" element={<Historique />} />
                 <Route path="/configuration" element={<Configuration />} />
+                <Route path="/linkedin/search" element={<LinkedInSearch />} />
                 <Route
                   path="/admin/users"
                   element={
                     <AdminRoute>
                       <AdminUsers />
+                    </AdminRoute>
+                  }
+                />
+                <Route
+                  path="/admin/linkedin"
+                  element={
+                    <AdminRoute>
+                      <LinkedInSettings />
                     </AdminRoute>
                   }
                 />
