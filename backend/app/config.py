@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
+    # CORS
+    cors_origins: str = "http://localhost:3000,http://localhost:3001"
+
     # LinkedIn
     linkedin_encryption_key: str = "change-this-key-in-production-32"
     linkedin_browser_profile_path: str = "./browser-profiles/linkedin"

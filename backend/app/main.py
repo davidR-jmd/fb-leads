@@ -5,10 +5,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import connect_to_mongo, close_mongo_connection, get_database
+from app.config import get_settings
 from app.auth.router import router as auth_router
 from app.admin.router import router as admin_router
 from app.linkedin.router import router as linkedin_router
 from app.linkedin.dependencies import initialize_linkedin_service, shutdown_linkedin_browser
+
+settings = get_settings()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,7 +42,7 @@ app = FastAPI(title="FB Leads API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
