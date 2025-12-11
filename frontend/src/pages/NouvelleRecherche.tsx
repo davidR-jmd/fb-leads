@@ -414,7 +414,7 @@ export default function NouvelleRecherche() {
           <h3 className="text-sm font-medium text-slate-700 mb-4">
             {t.columnMapping}
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="max-w-md">
             <SelectDropdown
               options={columnOptions}
               value={columnMapping.companyName}
@@ -422,14 +422,6 @@ export default function NouvelleRecherche() {
                 setColumnMapping((prev) => ({ ...prev, companyName: value }))
               }
               placeholder={t.companyName}
-            />
-            <SelectDropdown
-              options={columnOptions}
-              value={columnMapping.website}
-              onChange={(value) =>
-                setColumnMapping((prev) => ({ ...prev, website: value }))
-              }
-              placeholder={t.website}
             />
           </div>
         </div>
