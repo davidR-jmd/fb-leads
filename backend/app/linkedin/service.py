@@ -1,6 +1,7 @@
 """LinkedIn service - business logic (Single Responsibility)."""
 
 import logging
+from typing import TYPE_CHECKING
 
 from app.linkedin.interfaces import (
     ILinkedInConfigRepository,
@@ -19,8 +20,12 @@ from app.linkedin.exceptions import (
     LinkedInNotConfiguredError,
     LinkedInBrowserBusyError,
     LinkedInBrowserNotRunningError,
+    LinkedInRateLimitError,
 )
 from app.linkedin.http_client import LinkedInHttpClient, get_linkedin_http_client
+
+if TYPE_CHECKING:
+    from app.linkedin.rate_limiter import LinkedInRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +38,25 @@ class LinkedInService:
         repository: ILinkedInConfigRepository,
         browser: ILinkedInBrowser,
         encryption: IEncryptionService,
+        rate_limiter: "LinkedInRateLimiter | None" = None,
     ) -> None:
         """Initialize with dependencies."""
         self._repository = repository
         self._browser = browser
         self._encryption = encryption
+        self._rate_limiter = rate_limiter
+
+    async def _check_rate_limit(self) -> None:
+        """Check if rate limit allows a search. Raises LinkedInRateLimitError if not."""
+        if self._rate_limiter:
+            can_search, reason = await self._rate_limiter.can_search()
+            if not can_search:
+                raise LinkedInRateLimitError(reason or "Rate limit exceeded")
+
+    async def _record_search(self) -> None:
+        """Record a search operation for rate limiting."""
+        if self._rate_limiter:
+            await self._rate_limiter.record_search()
 
     async def initialize(self) -> None:
         """Initialize service on server start - auto-reconnect if needed."""
@@ -268,6 +287,9 @@ class LinkedInService:
             query: Search query
             limit: Maximum number of results (default 50, max 100)
         """
+        # Check rate limit before searching
+        await self._check_rate_limit()
+
         # Cap limit at 100 to avoid too many requests
         limit = min(limit, 100)
 
@@ -291,6 +313,10 @@ class LinkedInService:
                     http_client.set_cookie(cookie)
 
             contacts = await http_client.search_people(query, limit=limit)
+
+            # Record search for rate limiting
+            await self._record_search()
+
             return LinkedInSearchResponse(
                 contacts=contacts,
                 query=query,
@@ -305,6 +331,9 @@ class LinkedInService:
             raise LinkedInBrowserBusyError()
 
         contacts = await self._browser.search_people(query)
+
+        # Record search for rate limiting
+        await self._record_search()
 
         return LinkedInSearchResponse(
             contacts=contacts,
@@ -329,6 +358,7 @@ class LinkedInService:
             Combined results from all companies
         """
         import asyncio
+        import random
 
         # Check auth method and use appropriate client
         config = await self._repository.get_config()
@@ -338,6 +368,7 @@ class LinkedInService:
 
         auth_method = config.get("auth_method")
         all_contacts = []
+        searches_done = 0
 
         # If connected via cookie, use HTTP client
         if auth_method == LinkedInAuthMethod.COOKIE.value:
@@ -352,6 +383,9 @@ class LinkedInService:
 
             # Search for each company
             for company in companies:
+                # Check rate limit before each company search
+                await self._check_rate_limit()
+
                 # Build search query: "keywords" at "company"
                 if keywords.strip():
                     query = f"{keywords.strip()} {company}"
@@ -361,6 +395,10 @@ class LinkedInService:
                 logger.info(f"Searching: {query}")
                 contacts = await http_client.search_people(query, limit=limit_per_company)
 
+                # Record search for rate limiting
+                await self._record_search()
+                searches_done += 1
+
                 # Tag contacts with the company searched
                 for contact in contacts:
                     if not contact.company:
@@ -368,9 +406,14 @@ class LinkedInService:
 
                 all_contacts.extend(contacts)
 
-                # Small delay between company searches to avoid rate limiting
+                # Human-like delay between company searches to avoid rate limiting
                 if len(companies) > 1:
-                    await asyncio.sleep(1.5)
+                    delay = random.uniform(2.0, 5.0)
+                    # Occasional longer pause (every ~5 searches) like a human taking a break
+                    if searches_done % 5 == 0:
+                        delay += random.uniform(3.0, 8.0)
+                        logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
+                    await asyncio.sleep(delay)
 
             return LinkedInCompanySearchResponse(
                 contacts=all_contacts,
@@ -388,6 +431,9 @@ class LinkedInService:
 
         # Browser-based search (simplified - one query at a time)
         for company in companies:
+            # Check rate limit before each company search
+            await self._check_rate_limit()
+
             if keywords.strip():
                 query = f"{keywords.strip()} {company}"
             else:
@@ -395,6 +441,17 @@ class LinkedInService:
 
             contacts = await self._browser.search_people(query)
             all_contacts.extend(contacts[:limit_per_company])
+
+            # Record search for rate limiting
+            await self._record_search()
+            searches_done += 1
+
+            # Human-like delay between searches
+            if len(companies) > 1:
+                delay = random.uniform(2.0, 5.0)
+                if searches_done % 5 == 0:
+                    delay += random.uniform(3.0, 8.0)
+                await asyncio.sleep(delay)
 
         return LinkedInCompanySearchResponse(
             contacts=all_contacts,

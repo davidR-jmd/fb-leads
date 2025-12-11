@@ -56,3 +56,10 @@ class LinkedInInvalidVerificationCodeError(LinkedInError):
 
     def __init__(self):
         super().__init__("Invalid verification code")
+
+
+class LinkedInRateLimitError(LinkedInError):
+    """Raised when rate limit is exceeded."""
+
+    def __init__(self, message: str = "Rate limit exceeded"):
+        super().__init__(message)

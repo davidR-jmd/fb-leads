@@ -11,6 +11,7 @@ from app.linkedin.repository import LinkedInConfigRepository
 from app.linkedin.browser import LinkedInBrowser
 from app.linkedin.encryption import AESEncryptionService
 from app.linkedin.service import LinkedInService
+from app.linkedin.rate_limiter import LinkedInRateLimiter, get_rate_limiter
 
 settings = get_settings()
 
@@ -37,14 +38,17 @@ def get_linkedin_browser() -> LinkedInBrowser:
 
 def get_linkedin_service(
     repository: Annotated[LinkedInConfigRepository, Depends(get_linkedin_repository)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
 ) -> LinkedInService:
     """Get LinkedIn service."""
     browser = get_linkedin_browser()
     encryption = get_encryption_service()
+    rate_limiter = get_rate_limiter(db)
     return LinkedInService(
         repository=repository,
         browser=browser,
         encryption=encryption,
+        rate_limiter=rate_limiter,
     )
 
 
@@ -53,10 +57,12 @@ async def initialize_linkedin_service(db: AsyncIOMotorDatabase) -> LinkedInServi
     repository = LinkedInConfigRepository(db)
     browser = get_linkedin_browser()
     encryption = get_encryption_service()
+    rate_limiter = get_rate_limiter(db)
     service = LinkedInService(
         repository=repository,
         browser=browser,
         encryption=encryption,
+        rate_limiter=rate_limiter,
     )
     await service.initialize()
     return service

@@ -24,7 +24,7 @@ class LinkedInBrowser(ILinkedInBrowser):
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     )
     VIEWPORT = {"width": 1920, "height": 1080}
     LOCALE = "fr-FR"
@@ -171,11 +171,31 @@ class LinkedInBrowser(ILinkedInBrowser):
             await self._page.goto(self.LOGIN_URL)
             await self._human_delay()
 
-            # Fill credentials
-            await self._page.fill("#username", email)
+            # Fill credentials with human-like typing
+            username_field = await self._page.query_selector("#username")
+            if username_field:
+                await self._human_type(username_field, email)
+            else:
+                await self._page.fill("#username", email)
+            await self._human_delay(800, 1500)
+
+            password_field = await self._page.query_selector("#password")
+            if password_field:
+                await self._human_type(password_field, password)
+            else:
+                await self._page.fill("#password", password)
             await self._human_delay(500, 1000)
-            await self._page.fill("#password", password)
-            await self._human_delay(500, 1000)
+
+            # Move mouse to button before clicking (human behavior)
+            submit_button = await self._page.query_selector('button[type="submit"]')
+            if submit_button:
+                box = await submit_button.bounding_box()
+                if box:
+                    await self._human_mouse_move(
+                        int(box["x"] + box["width"] / 2),
+                        int(box["y"] + box["height"] / 2)
+                    )
+                    await asyncio.sleep(random.uniform(0.1, 0.3))
 
             # Click login button
             await self._page.click('button[type="submit"]')
@@ -545,7 +565,17 @@ class LinkedInBrowser(ILinkedInBrowser):
             if not results_found:
                 logger.warning("No results container found, trying to extract anyway...")
 
-            await self._human_delay(2000, 3000)
+            # Simulate reading the page before extracting data
+            await self._simulate_reading(1.5, 3.0)
+
+            # Scroll down to load more results and simulate human behavior
+            for _ in range(random.randint(2, 4)):
+                await self._human_scroll("down")
+                await self._simulate_reading(0.5, 1.5)
+
+            # Scroll back up to see all results
+            await self._human_scroll("up", random.randint(200, 400))
+            await self._human_delay(1000, 2000)
 
             # Extract contacts with multiple selector strategies
             contacts_data = await self._page.evaluate("""
@@ -672,10 +702,85 @@ class LinkedInBrowser(ILinkedInBrowser):
 
     # Human-like behavior
     def _get_random_delay(self, min_ms: int = 2000, max_ms: int = 5000) -> int:
-        """Get a random delay in milliseconds."""
-        return random.randint(min_ms, max_ms)
+        """Get a random delay in milliseconds with human-like variation."""
+        base_delay = random.randint(min_ms, max_ms)
+
+        # 20% chance of a longer "distraction" pause (humans get distracted)
+        if random.random() < 0.2:
+            base_delay += random.randint(1000, 3000)
+
+        # Add micro-variations for naturalness
+        variation = random.randint(-100, 100)
+        return max(min_ms, base_delay + variation)
 
     async def _human_delay(self, min_ms: int = 2000, max_ms: int = 5000) -> None:
         """Wait for a random human-like delay."""
         delay_ms = self._get_random_delay(min_ms, max_ms)
         await asyncio.sleep(delay_ms / 1000)
+
+    async def _human_type(self, element, text: str) -> None:
+        """Type text character by character with human-like delays."""
+        await element.click()
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+
+        for char in text:
+            await element.type(char, delay=random.randint(50, 150))
+            # Occasional longer pause (like thinking)
+            if random.random() < 0.1:
+                await asyncio.sleep(random.uniform(0.2, 0.5))
+
+    async def _human_scroll(self, direction: str = "down", amount: int | None = None) -> None:
+        """Scroll the page like a human would.
+
+        Args:
+            direction: "down" or "up"
+            amount: Pixels to scroll. If None, uses random amount.
+        """
+        if amount is None:
+            amount = random.randint(300, 700)
+
+        if direction == "up":
+            amount = -amount
+
+        # Smooth scroll with multiple small steps
+        steps = random.randint(3, 6)
+        step_amount = amount // steps
+
+        for _ in range(steps):
+            await self._page.evaluate(f"window.scrollBy(0, {step_amount})")
+            await asyncio.sleep(random.uniform(0.05, 0.15))
+
+        # Small pause after scrolling (human reads content)
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+
+    async def _human_mouse_move(self, x: int, y: int) -> None:
+        """Move mouse to position with human-like trajectory."""
+        # Get current mouse position (approximate center if unknown)
+        current_x = random.randint(400, 600)
+        current_y = random.randint(300, 500)
+
+        # Calculate distance and steps
+        distance = ((x - current_x) ** 2 + (y - current_y) ** 2) ** 0.5
+        steps = max(5, int(distance / 50))
+
+        for i in range(steps):
+            # Add slight curve/randomness to movement
+            progress = (i + 1) / steps
+            # Ease-out curve for natural deceleration
+            eased_progress = 1 - (1 - progress) ** 2
+
+            next_x = current_x + (x - current_x) * eased_progress + random.randint(-2, 2)
+            next_y = current_y + (y - current_y) * eased_progress + random.randint(-2, 2)
+
+            await self._page.mouse.move(next_x, next_y)
+            await asyncio.sleep(random.uniform(0.01, 0.03))
+
+    async def _simulate_reading(self, min_seconds: float = 1.0, max_seconds: float = 3.0) -> None:
+        """Simulate reading content on the page."""
+        read_time = random.uniform(min_seconds, max_seconds)
+
+        # Occasionally do small scrolls while "reading"
+        if random.random() < 0.3:
+            await self._human_scroll("down", random.randint(100, 200))
+
+        await asyncio.sleep(read_time)

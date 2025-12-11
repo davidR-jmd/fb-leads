@@ -36,7 +36,9 @@ from app.linkedin.exceptions import (
     LinkedInBrowserNotRunningError,
     LinkedInNotConfiguredError,
     LinkedInError,
+    LinkedInRateLimitError,
 )
+from app.linkedin.rate_limiter import get_rate_limiter
 
 router = APIRouter(prefix="/linkedin", tags=["linkedin"])
 
@@ -169,6 +171,11 @@ async def search(
     """
     try:
         return await service.search(request.query, limit=request.limit)
+    except LinkedInRateLimitError as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=e.message,
+        )
     except LinkedInNotConfiguredError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -206,6 +213,11 @@ async def search_by_companies(
             companies=request.companies,
             keywords=request.keywords,
             limit_per_company=request.limit_per_company,
+        )
+    except LinkedInRateLimitError as e:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=e.message,
         )
     except LinkedInNotConfiguredError as e:
         raise HTTPException(
@@ -338,13 +350,28 @@ async def run_background_search(
 ) -> None:
     """Background task to run the search and save results."""
     import logging
+    import random
     logger = logging.getLogger(__name__)
 
     search_repo = SearchResultsRepository(db)
     http_client = get_linkedin_http_client()
+    rate_limiter = get_rate_limiter(db)
+    searches_done = 0
 
     try:
         for company in companies:
+            # Check rate limit before each search
+            can_search, reason = await rate_limiter.can_search()
+            if not can_search:
+                logger.warning(f"Rate limit reached: {reason}. Pausing search.")
+                # Wait for cooldown and retry
+                await asyncio.sleep(60)  # Wait 1 minute then check again
+                can_search, reason = await rate_limiter.can_search()
+                if not can_search:
+                    logger.error(f"Still rate limited after wait: {reason}")
+                    await search_repo.complete_session(session_id, "rate_limited")
+                    return
+
             # Build search query
             if keywords.strip():
                 query = f"{keywords.strip()} {company}"
@@ -360,6 +387,10 @@ async def run_background_search(
                     company_filter=company,
                     keywords_filter=keywords if keywords.strip() else None,
                 )
+
+                # Record search for rate limiting
+                await rate_limiter.record_search()
+                searches_done += 1
 
                 # Convert to SearchResultDocument
                 results = [
@@ -381,8 +412,13 @@ async def run_background_search(
             except Exception as e:
                 logger.error(f"Error searching {company}: {e}")
 
-            # Delay between searches
-            await asyncio.sleep(1.5)
+            # Human-like delay between searches to avoid rate limiting
+            delay = random.uniform(2.0, 5.0)
+            # Occasional longer pause like a human taking a break
+            if searches_done % 5 == 0:
+                delay += random.uniform(3.0, 8.0)
+                logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
+            await asyncio.sleep(delay)
 
         # Mark as completed
         await search_repo.complete_session(session_id, "completed")
@@ -511,3 +547,16 @@ async def debug_search(
         "saved_to": "/tmp/linkedin_search_debug.html",
         "first_500_chars": html[:500],
     }
+
+
+@router.get("/rate-limit-status")
+async def get_rate_limit_status(
+    _: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+) -> dict:
+    """
+    Get current rate limit status.
+    Shows remaining searches for today/this hour and session info.
+    """
+    rate_limiter = get_rate_limiter(db)
+    return await rate_limiter.get_status()
