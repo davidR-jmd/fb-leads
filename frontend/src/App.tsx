@@ -27,7 +27,7 @@ function App() {
           <ProtectedRoute>
             <Layout>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
+                <Route path="/" element={<NouvelleRecherche />} />
                 <Route path="/recherche" element={<NouvelleRecherche />} />
                 <Route path="/historique" element={<Historique />} />
                 <Route path="/configuration" element={<Configuration />} />
