@@ -64,13 +64,6 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 h-full w-56 bg-slate-800 flex flex-col">
-      {/* Logo */}
-      <div className="p-4 flex items-center justify-center">
-        <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center">
-          <span className="text-white text-xl font-bold">F</span>
-        </div>
-      </div>
-
       {/* Navigation - DRY: Maps over config instead of repeating JSX */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {visibleItems.map((item) => (
