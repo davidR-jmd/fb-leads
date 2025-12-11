@@ -16,6 +16,7 @@ import type {
   SearchSessionResponse,
   SearchResultsPageResponse,
   SearchSessionStatusResponse,
+  RateLimitStatus,
 } from '../types/linkedin';
 
 export const linkedInApi = {
@@ -131,6 +132,15 @@ export const linkedInApi = {
       `/linkedin/search-session/${sessionId}/results`,
       { params: { page, page_size: pageSize } }
     );
+    return response.data;
+  },
+
+  /**
+   * Get current rate limit status
+   * Shows remaining searches for today/this hour and session info
+   */
+  getRateLimitStatus: async (): Promise<RateLimitStatus> => {
+    const response = await apiClient.get<RateLimitStatus>('/linkedin/rate-limit-status');
     return response.data;
   },
 };

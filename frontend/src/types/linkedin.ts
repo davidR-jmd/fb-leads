@@ -105,3 +105,21 @@ export interface SearchSessionStatusResponse {
   keywords: string;
   created_at: string;
 }
+
+export interface RateLimitLimits {
+  per_hour: number;
+  per_day: number;
+  session_minutes: number;
+}
+
+export interface RateLimitStatus {
+  searches_today: number;
+  searches_this_hour: number;
+  searches_remaining_today: number;
+  searches_remaining_hour: number;
+  session_duration_minutes: number;
+  max_session_minutes: number;
+  cooldown_remaining_minutes: number;
+  total_searches: number;
+  limits: RateLimitLimits;
+}

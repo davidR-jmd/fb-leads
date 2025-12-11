@@ -16,14 +16,40 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 logger = logging.getLogger(__name__)
 
 
+def _ensure_utc_aware(dt: datetime | str | None) -> datetime | None:
+    """Ensure a datetime is UTC-aware.
+
+    Handles:
+    - None values
+    - ISO format strings
+    - Offset-naive datetimes (assumes UTC)
+    - Offset-aware datetimes (converts to UTC)
+    """
+    if dt is None:
+        return None
+
+    if isinstance(dt, str):
+        # Parse ISO format string
+        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+
+    if dt.tzinfo is None:
+        # Assume naive datetimes are UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        # Convert to UTC if different timezone
+        dt = dt.astimezone(timezone.utc)
+
+    return dt
+
+
 class LinkedInRateLimiter:
     """Rate limiter for LinkedIn operations to prevent account blocking."""
 
-    # Rate limits (conservative to avoid detection)
-    MAX_SEARCHES_PER_HOUR = 25
-    MAX_SEARCHES_PER_DAY = 80
-    MAX_SESSION_DURATION_MINUTES = 45  # Force break after 45 minutes
-    COOLDOWN_AFTER_SESSION_MINUTES = 15  # 15 min break between sessions
+    # Rate limits (balanced for active users while avoiding detection)
+    MAX_SEARCHES_PER_HOUR = 50
+    MAX_SEARCHES_PER_DAY = 300
+    MAX_SESSION_DURATION_MINUTES = 60  # Force break after 60 minutes
+    COOLDOWN_AFTER_SESSION_MINUTES = 10  # 10 min break between sessions
 
     RATE_LIMIT_DOC_ID = "linkedin_rate_limits"
 
@@ -66,19 +92,14 @@ class LinkedInRateLimiter:
         now = datetime.now(timezone.utc)
 
         # Check if in cooldown period
-        cooldown_until = data.get("cooldown_until")
-        if cooldown_until:
-            if isinstance(cooldown_until, str):
-                cooldown_until = datetime.fromisoformat(cooldown_until.replace("Z", "+00:00"))
-            if now < cooldown_until:
-                remaining = (cooldown_until - now).seconds // 60
-                return False, f"In cooldown period. Please wait {remaining} minutes."
+        cooldown_until = _ensure_utc_aware(data.get("cooldown_until"))
+        if cooldown_until and now < cooldown_until:
+            remaining = int((cooldown_until - now).total_seconds() // 60)
+            return False, f"In cooldown period. Please wait {remaining} minutes."
 
         # Check daily limit
-        day_started = data.get("day_started")
+        day_started = _ensure_utc_aware(data.get("day_started"))
         if day_started:
-            if isinstance(day_started, str):
-                day_started = datetime.fromisoformat(day_started.replace("Z", "+00:00"))
             # Reset if new day
             if now.date() > day_started.date():
                 await self._reset_daily_counts()
@@ -88,10 +109,8 @@ class LinkedInRateLimiter:
             return False, f"Daily limit reached ({self.MAX_SEARCHES_PER_DAY} searches). Try again tomorrow."
 
         # Check hourly limit
-        hour_started = data.get("hour_started")
+        hour_started = _ensure_utc_aware(data.get("hour_started"))
         if hour_started:
-            if isinstance(hour_started, str):
-                hour_started = datetime.fromisoformat(hour_started.replace("Z", "+00:00"))
             # Reset if new hour
             if (now - hour_started).total_seconds() >= 3600:
                 await self._reset_hourly_counts()
@@ -101,10 +120,8 @@ class LinkedInRateLimiter:
             return False, f"Hourly limit reached ({self.MAX_SEARCHES_PER_HOUR} searches). Please wait."
 
         # Check session duration
-        session_started = data.get("session_started")
+        session_started = _ensure_utc_aware(data.get("session_started"))
         if session_started:
-            if isinstance(session_started, str):
-                session_started = datetime.fromisoformat(session_started.replace("Z", "+00:00"))
             session_duration = (now - session_started).total_seconds() / 60
             if session_duration >= self.MAX_SESSION_DURATION_MINUTES:
                 # Force cooldown
@@ -201,21 +218,16 @@ class LinkedInRateLimiter:
         searches_remaining_hour = max(0, self.MAX_SEARCHES_PER_HOUR - data.get("searches_this_hour", 0))
 
         # Session duration
-        session_started = data.get("session_started")
+        session_started = _ensure_utc_aware(data.get("session_started"))
         session_minutes = 0
         if session_started:
-            if isinstance(session_started, str):
-                session_started = datetime.fromisoformat(session_started.replace("Z", "+00:00"))
             session_minutes = int((now - session_started).total_seconds() / 60)
 
         # Cooldown
-        cooldown_until = data.get("cooldown_until")
+        cooldown_until = _ensure_utc_aware(data.get("cooldown_until"))
         cooldown_remaining = 0
-        if cooldown_until:
-            if isinstance(cooldown_until, str):
-                cooldown_until = datetime.fromisoformat(cooldown_until.replace("Z", "+00:00"))
-            if now < cooldown_until:
-                cooldown_remaining = int((cooldown_until - now).total_seconds() / 60)
+        if cooldown_until and now < cooldown_until:
+            cooldown_remaining = int((cooldown_until - now).total_seconds() / 60)
 
         return {
             "searches_today": data.get("searches_today", 0),

@@ -3,9 +3,9 @@
  * Single Responsibility: Search for contacts on LinkedIn
  */
 import React, { useEffect, useState } from 'react';
-import { Search, Linkedin, ExternalLink, AlertCircle } from 'lucide-react';
+import { Search, Linkedin, ExternalLink, AlertCircle, Activity } from 'lucide-react';
 import { linkedInApi } from '../api/linkedin.api';
-import { LinkedInStatus, type LinkedInContact, type LinkedInStatusResponse } from '../types/linkedin';
+import { LinkedInStatus, type LinkedInContact, type LinkedInStatusResponse, type RateLimitStatus } from '../types/linkedin';
 import { TRANSLATIONS } from '../constants/translations';
 
 const T = TRANSLATIONS.pages.linkedin;
@@ -48,26 +48,51 @@ function ContactCard({ contact }: { contact: LinkedInContact }) {
 }
 
 /**
- * Status Indicator Component
+ * Status Indicator Component with Rate Limit Info
  */
-function StatusIndicator({ status }: { status: LinkedInStatus }) {
+function StatusIndicator({ status, rateLimit }: { status: LinkedInStatus; rateLimit: RateLimitStatus | null }) {
   const isConnected = status === LinkedInStatus.CONNECTED;
   const isBusy = status === LinkedInStatus.BUSY;
 
   return (
-    <div className={`flex items-center gap-2 text-sm ${
-      isConnected ? 'text-green-600' : isBusy ? 'text-blue-600' : 'text-slate-500'
-    }`}>
-      <span className={`w-2 h-2 rounded-full ${
-        isConnected ? 'bg-green-500' : isBusy ? 'bg-blue-500 animate-pulse' : 'bg-slate-400'
-      }`} />
-      {T.statusLabels[status] || T.statusLabels.disconnected}
+    <div className="flex flex-wrap items-center gap-4">
+      <div className={`flex items-center gap-2 text-sm ${
+        isConnected ? 'text-green-600' : isBusy ? 'text-blue-600' : 'text-slate-500'
+      }`}>
+        <span className={`w-2 h-2 rounded-full ${
+          isConnected ? 'bg-green-500' : isBusy ? 'bg-blue-500 animate-pulse' : 'bg-slate-400'
+        }`} />
+        {T.statusLabels[status] || T.statusLabels.disconnected}
+      </div>
+
+      {/* Rate Limit Badge - Only show when connected */}
+      {isConnected && rateLimit && (
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          <Activity size={14} className="text-blue-500" />
+          <span className={rateLimit.searches_remaining_hour <= 5 ? 'text-amber-600 font-medium' : ''}>
+            {rateLimit.searches_remaining_hour}/{rateLimit.limits.per_hour} cette heure
+          </span>
+          <span className="text-slate-300">|</span>
+          <span className={rateLimit.searches_remaining_today <= 10 ? 'text-amber-600 font-medium' : ''}>
+            {rateLimit.searches_remaining_today}/{rateLimit.limits.per_day} aujourd'hui
+          </span>
+          {rateLimit.cooldown_remaining_minutes > 0 && (
+            <>
+              <span className="text-slate-300">|</span>
+              <span className="text-amber-600 font-medium">
+                Pause: {rateLimit.cooldown_remaining_minutes}min
+              </span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function LinkedInSearch() {
   const [statusData, setStatusData] = useState<LinkedInStatusResponse | null>(null);
+  const [rateLimitData, setRateLimitData] = useState<RateLimitStatus | null>(null);
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(50); // Default 50 results
   const [contacts, setContacts] = useState<LinkedInContact[]>([]);
@@ -81,6 +106,16 @@ export default function LinkedInSearch() {
     try {
       const data = await linkedInApi.getStatus();
       setStatusData(data);
+
+      // Load rate limit status if connected
+      if (data.status === LinkedInStatus.CONNECTED) {
+        try {
+          const rateLimit = await linkedInApi.getRateLimitStatus();
+          setRateLimitData(rateLimit);
+        } catch (err) {
+          console.error('Failed to load rate limit status:', err);
+        }
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Erreur lors du chargement du statut');
     } finally {
@@ -139,9 +174,9 @@ export default function LinkedInSearch() {
         </p>
       </div>
 
-      {/* Status Indicator */}
+      {/* Status Indicator with Rate Limit Info */}
       <div className="mb-6">
-        <StatusIndicator status={statusData?.status || LinkedInStatus.DISCONNECTED} />
+        <StatusIndicator status={statusData?.status || LinkedInStatus.DISCONNECTED} rateLimit={rateLimitData} />
       </div>
 
       {!canSearch ? (

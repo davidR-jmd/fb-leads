@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowLeft, AlertCircle, Search, ExternalLink, Loader2, Linkedin, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Search, ExternalLink, Loader2, Linkedin, ChevronLeft, ChevronRight, RefreshCw, Activity } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { TRANSLATIONS } from '../constants/translations';
 import Stepper from '../components/Stepper';
 import FileUploadZone from '../components/FileUploadZone';
 import SelectDropdown from '../components/SelectDropdown';
 import { linkedInApi } from '../api/linkedin.api';
-import type { LinkedInContact, LinkedInStatusResponse, SearchResultsPageResponse } from '../types/linkedin';
+import type { LinkedInContact, LinkedInStatusResponse, SearchResultsPageResponse, RateLimitStatus } from '../types/linkedin';
 import { LinkedInStatus } from '../types/linkedin';
 
 const t = TRANSLATIONS.pages.newSearch;
@@ -43,6 +43,7 @@ export default function NouvelleRecherche() {
   const [companiesSearched, setCompaniesSearched] = useState(0);
   const [totalCompanies, setTotalCompanies] = useState(0);
   const [linkedInStatus, setLinkedInStatus] = useState<LinkedInStatusResponse | null>(null);
+  const [rateLimitData, setRateLimitData] = useState<RateLimitStatus | null>(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
 
   // Session and pagination state
@@ -61,6 +62,16 @@ export default function NouvelleRecherche() {
       try {
         const status = await linkedInApi.getStatus();
         setLinkedInStatus(status);
+
+        // Load rate limit status if connected
+        if (status.status === LinkedInStatus.CONNECTED) {
+          try {
+            const rateLimit = await linkedInApi.getRateLimitStatus();
+            setRateLimitData(rateLimit);
+          } catch (err) {
+            console.error('Failed to load rate limit status:', err);
+          }
+        }
       } catch (err) {
         console.error('Failed to load LinkedIn status:', err);
       } finally {
@@ -316,7 +327,7 @@ export default function NouvelleRecherche() {
       <h1 className="text-2xl font-semibold text-slate-800 mb-6">{t.title}</h1>
 
       {/* LinkedIn Status Banner */}
-      <div className={`rounded-lg border p-4 mb-6 flex items-center justify-between ${
+      <div className={`rounded-lg border p-4 mb-6 ${
         isLoadingStatus
           ? 'bg-slate-50 border-slate-200'
           : linkedInStatus?.status === LinkedInStatus.CONNECTED
@@ -325,42 +336,78 @@ export default function NouvelleRecherche() {
               ? 'bg-blue-50 border-blue-200'
               : 'bg-yellow-50 border-yellow-200'
       }`}>
-        <div className="flex items-center gap-3">
-          <Linkedin className={`${
-            linkedInStatus?.status === LinkedInStatus.CONNECTED
-              ? 'text-green-600'
-              : linkedInStatus?.status === LinkedInStatus.BUSY
-                ? 'text-blue-600'
-                : 'text-yellow-600'
-          }`} size={24} />
-          <div>
-            <p className={`font-medium ${
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Linkedin className={`${
               linkedInStatus?.status === LinkedInStatus.CONNECTED
-                ? 'text-green-800'
+                ? 'text-green-600'
                 : linkedInStatus?.status === LinkedInStatus.BUSY
-                  ? 'text-blue-800'
-                  : 'text-yellow-800'
-            }`}>
-              {isLoadingStatus
-                ? 'Chargement du statut LinkedIn...'
-                : linkedInStatus?.status === LinkedInStatus.CONNECTED
-                  ? 'LinkedIn connecté'
+                  ? 'text-blue-600'
+                  : 'text-yellow-600'
+            }`} size={24} />
+            <div>
+              <p className={`font-medium ${
+                linkedInStatus?.status === LinkedInStatus.CONNECTED
+                  ? 'text-green-800'
                   : linkedInStatus?.status === LinkedInStatus.BUSY
-                    ? 'LinkedIn occupé'
-                    : 'LinkedIn non connecté'}
-            </p>
-            {linkedInStatus?.email && (
-              <p className="text-sm text-slate-600">{linkedInStatus.email}</p>
+                    ? 'text-blue-800'
+                    : 'text-yellow-800'
+              }`}>
+                {isLoadingStatus
+                  ? 'Chargement du statut LinkedIn...'
+                  : linkedInStatus?.status === LinkedInStatus.CONNECTED
+                    ? 'LinkedIn connecté'
+                    : linkedInStatus?.status === LinkedInStatus.BUSY
+                      ? 'LinkedIn occupé'
+                      : 'LinkedIn non connecté'}
+              </p>
+              {linkedInStatus?.email && (
+                <p className="text-sm text-slate-600">{linkedInStatus.email}</p>
+              )}
+            </div>
+          </div>
+          <div className={`w-3 h-3 rounded-full ${
+            linkedInStatus?.status === LinkedInStatus.CONNECTED
+              ? 'bg-green-500'
+              : linkedInStatus?.status === LinkedInStatus.BUSY
+                ? 'bg-blue-500 animate-pulse'
+                : 'bg-yellow-500'
+          }`} />
+        </div>
+
+        {/* Rate Limit Info - Show when connected */}
+        {linkedInStatus?.status === LinkedInStatus.CONNECTED && rateLimitData && (
+          <div className="mt-3 pt-3 border-t border-green-200">
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-2 text-green-700">
+                <Activity size={16} />
+                <span className="font-medium">Quotas :</span>
+              </div>
+              <div className={`${rateLimitData.searches_remaining_hour <= 5 ? 'text-amber-700 font-medium' : 'text-green-700'}`}>
+                {rateLimitData.searches_remaining_hour}/{rateLimitData.limits.per_hour} cette heure
+              </div>
+              <span className="text-green-300">|</span>
+              <div className={`${rateLimitData.searches_remaining_today <= 10 ? 'text-amber-700 font-medium' : 'text-green-700'}`}>
+                {rateLimitData.searches_remaining_today}/{rateLimitData.limits.per_day} aujourd'hui
+              </div>
+              {rateLimitData.cooldown_remaining_minutes > 0 && (
+                <>
+                  <span className="text-green-300">|</span>
+                  <div className="text-amber-700 font-medium flex items-center gap-1">
+                    <AlertCircle size={14} />
+                    Pause: {rateLimitData.cooldown_remaining_minutes} min
+                  </div>
+                </>
+              )}
+            </div>
+            {/* Warning if near limits */}
+            {(rateLimitData.searches_remaining_hour <= 5 || rateLimitData.searches_remaining_today <= 10) && (
+              <p className="mt-2 text-xs text-amber-700">
+                Vous approchez de la limite de recherches. Les recherches seront automatiquement espacées pour éviter le blocage.
+              </p>
             )}
           </div>
-        </div>
-        <div className={`w-3 h-3 rounded-full ${
-          linkedInStatus?.status === LinkedInStatus.CONNECTED
-            ? 'bg-green-500'
-            : linkedInStatus?.status === LinkedInStatus.BUSY
-              ? 'bg-blue-500 animate-pulse'
-              : 'bg-yellow-500'
-        }`} />
+        )}
       </div>
 
       {/* Warning if not connected */}

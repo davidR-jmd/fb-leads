@@ -7,9 +7,9 @@
  * 2. Fallback: Manual login in visible browser window
  */
 import React, { useEffect, useState } from 'react';
-import { Linkedin, HelpCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { Linkedin, HelpCircle, ChevronDown, ChevronUp, ExternalLink, Clock, Activity, AlertTriangle } from 'lucide-react';
 import { linkedInApi } from '../api/linkedin.api';
-import { LinkedInStatus, LinkedInAuthMethod, type LinkedInStatusResponse } from '../types/linkedin';
+import { LinkedInStatus, LinkedInAuthMethod, type LinkedInStatusResponse, type RateLimitStatus } from '../types/linkedin';
 import { TRANSLATIONS } from '../constants/translations';
 import LinkedInVerifyModal from '../components/LinkedInVerifyModal';
 
@@ -57,8 +57,123 @@ function AuthMethodBadge({ method }: { method: LinkedInAuthMethod | null | undef
   );
 }
 
+/**
+ * Progress bar component for rate limits
+ */
+function ProgressBar({ current, max, color = 'blue' }: { current: number; max: number; color?: string }) {
+  const percentage = Math.min((current / max) * 100, 100);
+  const isWarning = percentage >= 80;
+  const isDanger = percentage >= 95;
+
+  const barColor = isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : `bg-${color}-500`;
+
+  return (
+    <div className="w-full bg-slate-200 rounded-full h-2">
+      <div
+        className={`h-2 rounded-full transition-all duration-300 ${isDanger ? 'bg-red-500' : isWarning ? 'bg-amber-500' : 'bg-blue-500'}`}
+        style={{ width: `${percentage}%` }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Rate limit status card component
+ */
+function RateLimitCard({ rateLimit }: { rateLimit: RateLimitStatus | null }) {
+  if (!rateLimit) return null;
+
+  const hourlyUsage = rateLimit.searches_this_hour;
+  const hourlyLimit = rateLimit.limits.per_hour;
+  const dailyUsage = rateLimit.searches_today;
+  const dailyLimit = rateLimit.limits.per_day;
+  const sessionMinutes = rateLimit.session_duration_minutes;
+  const maxSessionMinutes = rateLimit.max_session_minutes;
+
+  const isInCooldown = rateLimit.cooldown_remaining_minutes > 0;
+  const isNearHourlyLimit = hourlyUsage >= hourlyLimit * 0.8;
+  const isNearDailyLimit = dailyUsage >= dailyLimit * 0.8;
+
+  return (
+    <div className="bg-white shadow-sm rounded-lg overflow-hidden max-w-xl mt-6">
+      <div className="p-6">
+        <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2 mb-4">
+          <Activity className="text-blue-600" size={20} />
+          Quotas de recherche LinkedIn
+        </h2>
+
+        {isInCooldown && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+            <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={16} />
+            <div>
+              <p className="text-sm font-medium text-amber-800">Pause en cours</p>
+              <p className="text-xs text-amber-700">
+                Reprise dans {rateLimit.cooldown_remaining_minutes} minute{rateLimit.cooldown_remaining_minutes > 1 ? 's' : ''}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          {/* Hourly usage */}
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm text-slate-600">Cette heure</span>
+              <span className={`text-sm font-medium ${isNearHourlyLimit ? 'text-amber-600' : 'text-slate-800'}`}>
+                {hourlyUsage} / {hourlyLimit}
+              </span>
+            </div>
+            <ProgressBar current={hourlyUsage} max={hourlyLimit} />
+            <p className="text-xs text-slate-500 mt-1">
+              {rateLimit.searches_remaining_hour} recherche{rateLimit.searches_remaining_hour !== 1 ? 's' : ''} restante{rateLimit.searches_remaining_hour !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          {/* Daily usage */}
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm text-slate-600">Aujourd'hui</span>
+              <span className={`text-sm font-medium ${isNearDailyLimit ? 'text-amber-600' : 'text-slate-800'}`}>
+                {dailyUsage} / {dailyLimit}
+              </span>
+            </div>
+            <ProgressBar current={dailyUsage} max={dailyLimit} />
+            <p className="text-xs text-slate-500 mt-1">
+              {rateLimit.searches_remaining_today} recherche{rateLimit.searches_remaining_today !== 1 ? 's' : ''} restante{rateLimit.searches_remaining_today !== 1 ? 's' : ''}
+            </p>
+          </div>
+
+          {/* Session duration */}
+          {sessionMinutes > 0 && (
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm text-slate-600 flex items-center gap-1">
+                  <Clock size={14} />
+                  Session active
+                </span>
+                <span className="text-sm font-medium text-slate-800">
+                  {sessionMinutes} / {maxSessionMinutes} min
+                </span>
+              </div>
+              <ProgressBar current={sessionMinutes} max={maxSessionMinutes} />
+            </div>
+          )}
+
+          {/* Total searches */}
+          <div className="pt-2 border-t border-slate-100">
+            <p className="text-xs text-slate-500">
+              Total des recherches : <span className="font-medium text-slate-700">{rateLimit.total_searches}</span>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function LinkedInSettings() {
   const [statusData, setStatusData] = useState<LinkedInStatusResponse | null>(null);
+  const [rateLimitData, setRateLimitData] = useState<RateLimitStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -83,6 +198,16 @@ export default function LinkedInSettings() {
       if (data.status === LinkedInStatus.NEED_EMAIL_CODE) {
         setShowVerifyModal(true);
       }
+
+      // Load rate limit status if connected
+      if (data.status === LinkedInStatus.CONNECTED) {
+        try {
+          const rateLimit = await linkedInApi.getRateLimitStatus();
+          setRateLimitData(rateLimit);
+        } catch (err) {
+          console.error('Failed to load rate limit status:', err);
+        }
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Erreur lors du chargement du statut');
     } finally {
@@ -92,7 +217,21 @@ export default function LinkedInSettings() {
 
   useEffect(() => {
     loadStatus();
-  }, []);
+
+    // Refresh rate limit status every 30 seconds when connected
+    const interval = setInterval(async () => {
+      if (statusData?.status === LinkedInStatus.CONNECTED) {
+        try {
+          const rateLimit = await linkedInApi.getRateLimitStatus();
+          setRateLimitData(rateLimit);
+        } catch (err) {
+          console.error('Failed to refresh rate limit status:', err);
+        }
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [statusData?.status]);
 
   // Primary: Cookie-based authentication
   const handleConnectWithCookie = async (e: React.FormEvent) => {
@@ -480,6 +619,9 @@ export default function LinkedInSettings() {
           )}
         </div>
       </div>
+
+      {/* Rate Limit Status Card - Only show when connected */}
+      {isConnected && <RateLimitCard rateLimit={rateLimitData} />}
 
       {/* Verification Modal */}
       <LinkedInVerifyModal
