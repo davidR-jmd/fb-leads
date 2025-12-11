@@ -129,13 +129,31 @@ class LinkedInHttpClient:
             return False
 
     async def _extract_csrf_token(self, response: httpx.Response) -> None:
-        """Extract CSRF token from response cookies."""
+        """Extract CSRF token from response cookies or client cookies."""
+        # First check response cookies
         for cookie_name, cookie_value in response.cookies.items():
             if cookie_name == "JSESSIONID":
-                # Remove quotes if present
                 self._csrf_token = cookie_value.strip('"')
-                logger.info("CSRF token extracted")
-                break
+                logger.info(f"CSRF token from response: {self._csrf_token[:30]}...")
+                return
+
+        # Then check client cookies (might have been set during redirect)
+        if self._client:
+            jsession = self._client.cookies.get("JSESSIONID")
+            if jsession:
+                self._csrf_token = jsession.strip('"')
+                logger.info(f"CSRF token from client: {self._csrf_token[:30]}...")
+                return
+
+        # Try to extract from HTML
+        import re
+        match = re.search(r'"csrfToken":"([^"]+)"', response.text)
+        if match:
+            self._csrf_token = match.group(1)
+            logger.info(f"CSRF token from HTML: {self._csrf_token[:30]}...")
+            return
+
+        logger.warning("Could not extract CSRF token from any source")
 
     async def search_people(self, query: str, limit: int = 10) -> list[LinkedInContact]:
         """Search for people on LinkedIn.
@@ -153,32 +171,178 @@ class LinkedInHttpClient:
         try:
             client = await self._get_client()
 
-            # LinkedIn's internal search API
-            # Note: This is a simplified version - the real API is more complex
+            # First, ensure we have a CSRF token by visiting a page
+            if not self._csrf_token:
+                logger.info("Fetching CSRF token...")
+                response = await client.get(f"{self.BASE_URL}/feed/")
+                logger.info(f"Feed response cookies: {list(response.cookies.keys())}")
+                logger.info(f"Client cookies: {list(client.cookies.keys())}")
+                await self._extract_csrf_token(response)
+
+            if not self._csrf_token:
+                logger.warning("Could not extract CSRF token - API calls will likely fail")
+
+            # Use the typeahead/hits endpoint which works better
+            from urllib.parse import quote
             search_url = (
-                f"{self.VOYAGER_API}/search/blended"
-                f"?keywords={query}"
-                f"&origin=GLOBAL_SEARCH_HEADER"
-                f"&q=all"
-                f"&count={limit}"
+                f"{self.VOYAGER_API}/graphql"
+                f"?variables=(start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:{quote(query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))"
+                f"&queryId=voyagerSearchDashClusters.2268f03bb249beb14d05fcf85fbf8b25"
             )
 
-            headers = {**self.DEFAULT_HEADERS}
+            headers = {
+                "User-Agent": self.DEFAULT_HEADERS["User-Agent"],
+                "Accept": "application/vnd.linkedin.normalized+json+2.1",
+                "Accept-Language": "en-US,en;q=0.9",
+                "X-Li-Lang": "en_US",
+                "X-RestLi-Protocol-Version": "2.0.0",
+                "X-Li-Track": '{"clientVersion":"1.13.0","mpVersion":"1.13.0","osName":"web","timezoneOffset":2,"timezone":"Europe/Paris","deviceFormFactor":"DESKTOP","mpName":"voyager-web","displayDensity":1,"displayWidth":1920,"displayHeight":1080}',
+            }
             if self._csrf_token:
                 headers["Csrf-Token"] = self._csrf_token
 
+            logger.info(f"Voyager search: {search_url[:100]}...")
             response = await client.get(search_url, headers=headers)
 
-            if response.status_code != 200:
-                logger.warning(f"Search failed: {response.status_code}")
-                # Fall back to scraping if API fails
-                return await self._search_via_html(query, limit)
+            logger.info(f"Voyager response: {response.status_code}")
 
-            data = response.json()
-            return self._parse_search_results(data)
+            if response.status_code == 200:
+                data = response.json()
+                # Save for debugging
+                import json
+                with open("/tmp/voyager_response.json", "w") as f:
+                    json.dump(data, f, indent=2)
+                logger.info("Saved Voyager response to /tmp/voyager_response.json")
+
+                contacts = self._parse_voyager_graphql(data, limit)
+                if contacts:
+                    return contacts
+
+            # If GraphQL fails, try the dash search clusters endpoint
+            logger.info("Trying dash search endpoint...")
+            search_url2 = (
+                f"{self.VOYAGER_API}/search/dash/clusters"
+                f"?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175"
+                f"&origin=GLOBAL_SEARCH_HEADER"
+                f"&q=all"
+                f"&query=(keywords:{quote(query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)))"
+                f"&start=0"
+                f"&count={limit}"
+            )
+
+            response = await client.get(search_url2, headers=headers)
+            logger.info(f"Dash search response: {response.status_code}")
+
+            if response.status_code == 200:
+                data = response.json()
+                import json as json_module
+                with open("/tmp/dash_response.json", "w") as f:
+                    json_module.dump(data, f, indent=2)
+                logger.info("Saved dash response to /tmp/dash_response.json")
+                return self._parse_dash_search(data, limit)
+
+            logger.warning(f"All API methods failed, falling back to HTML")
+            return await self._search_via_html(query, limit)
 
         except Exception as e:
             logger.error(f"Search error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def _parse_voyager_graphql(self, data: dict, limit: int) -> list[LinkedInContact]:
+        """Parse Voyager GraphQL response."""
+        contacts = []
+        try:
+            included = data.get("included", [])
+            logger.info(f"GraphQL included items: {len(included)}")
+
+            for item in included:
+                # Look for profile data
+                if item.get("$type") == "com.linkedin.voyager.dash.identity.profile.Profile":
+                    first_name = item.get("firstName", "")
+                    last_name = item.get("lastName", "")
+                    name = f"{first_name} {last_name}".strip()
+
+                    if not name:
+                        continue
+
+                    public_id = item.get("publicIdentifier")
+                    profile_url = f"https://www.linkedin.com/in/{public_id}" if public_id else None
+
+                    contacts.append(LinkedInContact(
+                        name=name,
+                        title=item.get("headline"),
+                        location=None,
+                        profile_url=profile_url,
+                    ))
+
+                    if len(contacts) >= limit:
+                        break
+
+            logger.info(f"Parsed {len(contacts)} contacts from GraphQL")
+            return contacts
+
+        except Exception as e:
+            logger.error(f"Error parsing GraphQL: {e}")
+            return []
+
+    def _parse_dash_search(self, data: dict, limit: int) -> list[LinkedInContact]:
+        """Parse dash search clusters response."""
+        contacts = []
+        try:
+            included = data.get("included", [])
+            logger.info(f"Dash included items: {len(included)}")
+
+            # Look for EntityResultViewModel items - these contain the search results
+            for item in included:
+                item_type = item.get("$type", "")
+
+                if item_type == "com.linkedin.voyager.dash.search.EntityResultViewModel":
+                    # Extract name from title
+                    title_obj = item.get("title", {})
+                    name = title_obj.get("text", "") if isinstance(title_obj, dict) else ""
+
+                    if not name or len(name) < 2:
+                        continue
+
+                    # Extract headline from primarySubtitle
+                    subtitle_obj = item.get("primarySubtitle", {})
+                    headline = subtitle_obj.get("text", "") if isinstance(subtitle_obj, dict) else None
+
+                    # Extract location from secondarySubtitle
+                    location_obj = item.get("secondarySubtitle", {})
+                    location = location_obj.get("text", "") if isinstance(location_obj, dict) else None
+
+                    # Get profile URL
+                    profile_url = item.get("navigationUrl")
+
+                    contacts.append(LinkedInContact(
+                        name=name,
+                        title=headline,
+                        location=location,
+                        profile_url=profile_url,
+                    ))
+
+                    if len(contacts) >= limit:
+                        break
+
+            # Dedupe
+            seen = set()
+            unique = []
+            for c in contacts:
+                key = c.profile_url or c.name
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(c)
+
+            logger.info(f"Parsed {len(unique)} contacts from dash search")
+            return unique
+
+        except Exception as e:
+            logger.error(f"Error parsing dash search: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     async def _search_via_html(self, query: str, limit: int) -> list[LinkedInContact]:
@@ -197,31 +361,53 @@ class LinkedInHttpClient:
         try:
             client = await self._get_client()
 
-            # Use regular HTML headers for this request
+            # Use desktop browser headers to avoid mobile redirect
             html_headers = {
-                "User-Agent": self.DEFAULT_HEADERS["User-Agent"],
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer": f"{self.BASE_URL}/search/results/people/",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Upgrade-Insecure-Requests": "1",
+                "Referer": f"{self.BASE_URL}/feed/",
             }
 
             while len(all_contacts) < limit:
-                # Calculate start position (LinkedIn uses 'page' parameter)
-                start = (page - 1) * results_per_page
-
                 # Build URL with pagination
-                if page == 1:
-                    search_url = f"{self.BASE_URL}/search/results/people/?keywords={quote(query)}"
-                else:
-                    search_url = f"{self.BASE_URL}/search/results/people/?keywords={quote(query)}&page={page}"
+                search_url = f"{self.BASE_URL}/search/results/people/?keywords={quote(query)}"
+                if page > 1:
+                    search_url += f"&page={page}"
 
-                logger.info(f"Fetching page {page} (start={start})")
+                logger.info(f"Fetching page {page}: {search_url}")
 
-                response = await client.get(search_url, headers=html_headers)
+                response = await client.get(search_url, headers=html_headers, follow_redirects=False)
+
+                # Handle redirects manually to avoid mobile version
+                if response.status_code in (301, 302, 307, 308):
+                    location = response.headers.get("location", "")
+                    logger.info(f"Redirect to: {location}")
+                    # If redirecting to mobile, modify URL to stay on desktop
+                    if "/m/" in location:
+                        location = location.replace("/m/", "/")
+                    response = await client.get(location, headers=html_headers)
 
                 if response.status_code != 200:
                     logger.warning(f"HTML search page {page} failed: {response.status_code}")
                     break
+
+                # Save HTML for debugging
+                with open("/tmp/linkedin_search.html", "w") as f:
+                    f.write(response.text)
+                logger.info(f"Saved HTML to /tmp/linkedin_search.html ({len(response.text)} bytes)")
 
                 contacts = self._parse_html_search_results(response.text, results_per_page * 2)
 
