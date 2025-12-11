@@ -1,21 +1,35 @@
 """LinkedIn API router (Single Responsibility)."""
 
-from typing import Annotated
+import asyncio
+import json
+from typing import Annotated, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.auth.dependencies import get_current_user
 from app.admin.dependencies import get_current_admin_user
-from app.linkedin.dependencies import get_linkedin_service
+from app.database import get_database
+from app.linkedin.dependencies import get_linkedin_service, get_encryption_service
 from app.linkedin.service import LinkedInService
+from app.linkedin.search_repository import SearchResultsRepository
+from app.linkedin.models import SearchResultDocument
+from app.linkedin.http_client import get_linkedin_http_client
 from app.linkedin.schemas import (
     LinkedInConnectRequest,
     LinkedInCookieConnectRequest,
     LinkedInVerifyCodeRequest,
     LinkedInSearchRequest,
+    LinkedInCompanySearchRequest,
     LinkedInStatusResponse,
     LinkedInConnectResponse,
     LinkedInSearchResponse,
+    LinkedInCompanySearchResponse,
+    SearchSessionResponse,
+    SearchResultsPageResponse,
+    SearchSessionStatusResponse,
+    LinkedInContact,
 )
 from app.linkedin.exceptions import (
     LinkedInBrowserBusyError,
@@ -172,6 +186,44 @@ async def search(
         )
 
 
+@router.post("/search-companies", response_model=LinkedInCompanySearchResponse)
+async def search_by_companies(
+    request: LinkedInCompanySearchRequest,
+    _: Annotated[dict, Depends(get_current_user)],
+    service: Annotated[LinkedInService, Depends(get_linkedin_service)],
+) -> LinkedInCompanySearchResponse:
+    """
+    Search for contacts at specific companies from an Excel import.
+    Requires authentication.
+
+    Args:
+        companies: List of company names from Excel
+        keywords: Additional search keywords (e.g., "Directeur Marketing")
+        limit_per_company: Max results per company (default 10)
+    """
+    try:
+        return await service.search_by_companies(
+            companies=request.companies,
+            keywords=request.keywords,
+            limit_per_company=request.limit_per_company,
+        )
+    except LinkedInNotConfiguredError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+    except LinkedInBrowserBusyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=e.message,
+        )
+    except LinkedInError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
+
+
 @router.post("/disconnect")
 async def disconnect(
     _: Annotated[dict, Depends(get_current_admin_user)],
@@ -218,6 +270,202 @@ async def validate_session(
         )
 
 
+@router.post("/search-stream", response_model=SearchSessionResponse)
+async def start_search_stream(
+    request: LinkedInCompanySearchRequest,
+    background_tasks: BackgroundTasks,
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+    service: Annotated[LinkedInService, Depends(get_linkedin_service)],
+) -> SearchSessionResponse:
+    """
+    Start a streaming search for contacts at companies.
+    Returns a session ID that can be used to poll for results.
+    The search runs in the background and results are saved to DB.
+    """
+    search_repo = SearchResultsRepository(db)
+    user_id = str(user.get("_id", user.get("id", "unknown")))
+
+    # Check for cached search
+    cached = await search_repo.find_cached_search(
+        user_id=user_id,
+        companies=request.companies,
+        keywords=request.keywords,
+        max_age_hours=24,
+    )
+
+    if cached:
+        return SearchSessionResponse(
+            session_id=cached["_id"],
+            status="completed",
+            total_companies=cached.get("total_companies", len(request.companies)),
+            message="Résultats en cache trouvés",
+        )
+
+    # Create new search session
+    session_id = await search_repo.create_search_session(
+        user_id=user_id,
+        companies=request.companies,
+        keywords=request.keywords,
+    )
+
+    # Start background search task
+    background_tasks.add_task(
+        run_background_search,
+        session_id=session_id,
+        companies=request.companies,
+        keywords=request.keywords,
+        limit_per_company=request.limit_per_company,
+        db=db,
+        service=service,
+    )
+
+    return SearchSessionResponse(
+        session_id=session_id,
+        status="in_progress",
+        total_companies=len(request.companies),
+        message="Recherche démarrée",
+    )
+
+
+async def run_background_search(
+    session_id: str,
+    companies: list[str],
+    keywords: str,
+    limit_per_company: int,
+    db: AsyncIOMotorDatabase,
+    service: LinkedInService,
+) -> None:
+    """Background task to run the search and save results."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    search_repo = SearchResultsRepository(db)
+    http_client = get_linkedin_http_client()
+
+    try:
+        for company in companies:
+            # Build search query
+            if keywords.strip():
+                query = f"{keywords.strip()} {company}"
+            else:
+                query = company
+
+            logger.info(f"Searching: {query}")
+
+            try:
+                contacts = await http_client.search_people(
+                    query,
+                    limit=limit_per_company,
+                    company_filter=company,
+                    keywords_filter=keywords if keywords.strip() else None,
+                )
+
+                # Convert to SearchResultDocument
+                results = [
+                    SearchResultDocument(
+                        name=c.name,
+                        title=c.title,
+                        company=c.company or company,
+                        location=c.location,
+                        profile_url=c.profile_url,
+                        searched_company=company,
+                        searched_keywords=keywords,
+                    )
+                    for c in contacts
+                ]
+
+                # Save results to DB
+                await search_repo.add_results(session_id, results, company)
+
+            except Exception as e:
+                logger.error(f"Error searching {company}: {e}")
+
+            # Delay between searches
+            await asyncio.sleep(1.5)
+
+        # Mark as completed
+        await search_repo.complete_session(session_id, "completed")
+
+    except Exception as e:
+        logger.error(f"Background search failed: {e}")
+        await search_repo.complete_session(session_id, "failed")
+
+
+@router.get("/search-session/{session_id}/status", response_model=SearchSessionStatusResponse)
+async def get_search_session_status(
+    session_id: str,
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+) -> SearchSessionStatusResponse:
+    """Get the status of a search session."""
+    search_repo = SearchResultsRepository(db)
+    session = await search_repo.get_session(session_id)
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return SearchSessionStatusResponse(
+        session_id=session_id,
+        status=session.get("status", "unknown"),
+        companies_searched=session.get("companies_searched", 0),
+        total_companies=session.get("total_companies", 0),
+        total_results=len(session.get("results", [])),
+        keywords=session.get("keywords", ""),
+        created_at=str(session.get("created_at", "")),
+    )
+
+
+@router.get("/search-session/{session_id}/results", response_model=SearchResultsPageResponse)
+async def get_search_session_results(
+    session_id: str,
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> SearchResultsPageResponse:
+    """Get paginated results from a search session."""
+    search_repo = SearchResultsRepository(db)
+    data = await search_repo.get_session_results(session_id, page, page_size)
+
+    # Convert results to LinkedInContact format
+    contacts = [
+        LinkedInContact(
+            name=r.get("name"),
+            title=r.get("title"),
+            company=r.get("company"),
+            location=r.get("location"),
+            profile_url=r.get("profile_url"),
+        )
+        for r in data["results"]
+    ]
+
+    return SearchResultsPageResponse(
+        results=contacts,
+        total=data["total"],
+        page=data["page"],
+        page_size=data["page_size"],
+        total_pages=data["total_pages"],
+        companies_searched=data["companies_searched"],
+        total_companies=data["total_companies"],
+        status=data["status"],
+    )
+
+
+@router.get("/search-history")
+async def get_search_history(
+    user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=50),
+) -> dict:
+    """Get user's search history."""
+    search_repo = SearchResultsRepository(db)
+    user_id = str(user.get("_id", user.get("id", "unknown")))
+
+    return await search_repo.get_user_searches(user_id, page, page_size)
+
+
 @router.post("/debug-search")
 async def debug_search(
     request: LinkedInSearchRequest,
@@ -228,7 +476,6 @@ async def debug_search(
     Debug endpoint to see raw HTML from LinkedIn search.
     Requires admin role.
     """
-    from app.linkedin.http_client import get_linkedin_http_client
     from urllib.parse import quote
 
     http_client = get_linkedin_http_client()

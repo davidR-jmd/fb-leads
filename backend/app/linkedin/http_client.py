@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from typing import Any
+from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup
 
@@ -155,12 +156,66 @@ class LinkedInHttpClient:
 
         logger.warning("Could not extract CSRF token from any source")
 
-    async def search_people(self, query: str, limit: int = 10) -> list[LinkedInContact]:
-        """Search for people on LinkedIn.
+    async def _get_company_id(self, company_name: str) -> str | None:
+        """Search for a company and return its LinkedIn ID.
+
+        Args:
+            company_name: Name of the company to search for
+
+        Returns:
+            LinkedIn company ID (urn format) or None if not found
+        """
+        try:
+            client = await self._get_client()
+            headers = {**self.DEFAULT_HEADERS}
+            if self._csrf_token:
+                headers["Csrf-Token"] = self._csrf_token
+
+            # Search for company using typeahead API
+            search_url = (
+                f"{self.VOYAGER_API}/typeahead/hitsV2"
+                f"?keywords={quote(company_name)}"
+                f"&origin=GLOBAL_SEARCH_HEADER"
+                f"&q=type"
+                f"&type=COMPANY"
+            )
+
+            response = await client.get(search_url, headers=headers)
+
+            if response.status_code == 200:
+                data = response.json()
+                elements = data.get("elements", [])
+                if elements:
+                    # Get the first matching company
+                    for element in elements:
+                        target_urn = element.get("targetUrn", "")
+                        if target_urn and "company" in target_urn.lower():
+                            # Extract company ID from URN like "urn:li:company:12345"
+                            company_id = target_urn.split(":")[-1]
+                            logger.info(f"Found company ID for '{company_name}': {company_id}")
+                            return company_id
+
+            logger.warning(f"Could not find company ID for '{company_name}'")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting company ID: {e}")
+            return None
+
+    async def search_people(
+        self,
+        query: str,
+        limit: int = 10,
+        company_filter: str | None = None,
+        keywords_filter: str | None = None,
+    ) -> list[LinkedInContact]:
+        """Search for people on LinkedIn using advanced filters.
 
         Args:
             query: Search query (e.g., "Marketing Director Paris")
             limit: Maximum number of results
+            company_filter: If provided, filter by current company name
+            keywords_filter: If provided, filter by job title keywords
 
         Returns:
             List of LinkedIn contacts
@@ -182,14 +237,6 @@ class LinkedInHttpClient:
             if not self._csrf_token:
                 logger.warning("Could not extract CSRF token - API calls will likely fail")
 
-            # Use the typeahead/hits endpoint which works better
-            from urllib.parse import quote
-            search_url = (
-                f"{self.VOYAGER_API}/graphql"
-                f"?variables=(start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:{quote(query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))"
-                f"&queryId=voyagerSearchDashClusters.2268f03bb249beb14d05fcf85fbf8b25"
-            )
-
             headers = {
                 "User-Agent": self.DEFAULT_HEADERS["User-Agent"],
                 "Accept": "application/vnd.linkedin.normalized+json+2.1",
@@ -201,6 +248,18 @@ class LinkedInHttpClient:
             if self._csrf_token:
                 headers["Csrf-Token"] = self._csrf_token
 
+            # Build search query with filters
+            search_query = query
+            if company_filter and company_filter not in query:
+                search_query = f"{query} {company_filter}".strip()
+
+            # Try GraphQL endpoint first
+            search_url = (
+                f"{self.VOYAGER_API}/graphql"
+                f"?variables=(start:0,origin:GLOBAL_SEARCH_HEADER,query:(keywords:{quote(search_query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))"
+                f"&queryId=voyagerSearchDashClusters.2268f03bb249beb14d05fcf85fbf8b25"
+            )
+
             logger.info(f"Voyager search: {search_url[:100]}...")
             response = await client.get(search_url, headers=headers)
 
@@ -208,15 +267,17 @@ class LinkedInHttpClient:
 
             if response.status_code == 200:
                 data = response.json()
-                # Save for debugging
-                import json
                 with open("/tmp/voyager_response.json", "w") as f:
                     json.dump(data, f, indent=2)
                 logger.info("Saved Voyager response to /tmp/voyager_response.json")
 
-                contacts = self._parse_voyager_graphql(data, limit)
+                contacts = self._parse_voyager_graphql(data, limit * 3)
                 if contacts:
-                    return contacts
+                    # Post-filter results if filters are provided
+                    if company_filter or keywords_filter:
+                        contacts = self._filter_contacts(contacts, company_filter, keywords_filter)
+                    if contacts:
+                        return contacts[:limit]
 
             # If GraphQL fails, try the dash search clusters endpoint
             logger.info("Trying dash search endpoint...")
@@ -225,9 +286,9 @@ class LinkedInHttpClient:
                 f"?decorationId=com.linkedin.voyager.dash.deco.search.SearchClusterCollection-175"
                 f"&origin=GLOBAL_SEARCH_HEADER"
                 f"&q=all"
-                f"&query=(keywords:{quote(query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)))"
+                f"&query=(keywords:{quote(search_query)},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)))"
                 f"&start=0"
-                f"&count={limit}"
+                f"&count={limit * 3}"
             )
 
             response = await client.get(search_url2, headers=headers)
@@ -235,14 +296,26 @@ class LinkedInHttpClient:
 
             if response.status_code == 200:
                 data = response.json()
-                import json as json_module
                 with open("/tmp/dash_response.json", "w") as f:
-                    json_module.dump(data, f, indent=2)
+                    json.dump(data, f, indent=2)
                 logger.info("Saved dash response to /tmp/dash_response.json")
-                return self._parse_dash_search(data, limit)
 
-            logger.warning(f"All API methods failed, falling back to HTML")
-            return await self._search_via_html(query, limit)
+                contacts = self._parse_dash_search(data, limit * 3)
+                if contacts:
+                    # Post-filter results if filters are provided
+                    if company_filter or keywords_filter:
+                        contacts = self._filter_contacts(contacts, company_filter, keywords_filter)
+                    if contacts:
+                        return contacts[:limit]
+
+            # Final fallback: HTML scraping
+            logger.warning("All API methods failed, falling back to HTML")
+            contacts = await self._search_via_html(query, limit * 3, company_filter, keywords_filter)
+
+            if company_filter or keywords_filter:
+                contacts = self._filter_contacts(contacts, company_filter, keywords_filter)
+
+            return contacts[:limit]
 
         except Exception as e:
             logger.error(f"Search error: {e}")
@@ -345,16 +418,77 @@ class LinkedInHttpClient:
             traceback.print_exc()
             return []
 
-    async def _search_via_html(self, query: str, limit: int) -> list[LinkedInContact]:
-        """Fallback: Search by scraping HTML results page with pagination.
+    def _filter_contacts(
+        self,
+        contacts: list[LinkedInContact],
+        company_filter: str | None,
+        keywords_filter: str | None,
+    ) -> list[LinkedInContact]:
+        """Filter contacts to only include those matching the criteria.
 
-        LinkedIn shows ~10 results per page. We paginate like a regular user would,
-        with delays between requests to appear natural.
+        Args:
+            contacts: List of contacts to filter
+            company_filter: Company name to match (case insensitive, partial match)
+            keywords_filter: Keywords to find in title (case insensitive)
+
+        Returns:
+            Filtered list of contacts
         """
-        import asyncio
-        from urllib.parse import quote
+        if not company_filter and not keywords_filter:
+            return contacts
 
-        all_contacts = []
+        filtered = []
+        company_filter_lower = company_filter.lower().strip() if company_filter else None
+        keywords_lower = [kw.lower().strip() for kw in keywords_filter.split() if kw.strip()] if keywords_filter else []
+
+        for contact in contacts:
+            # Check company match
+            if company_filter_lower:
+                contact_company = (contact.company or "").lower()
+                contact_title = (contact.title or "").lower()
+
+                # Company should be in the company field OR in the title (e.g., "Director at Company")
+                company_match = (
+                    company_filter_lower in contact_company or
+                    company_filter_lower in contact_title or
+                    # Also check for common patterns
+                    any(word in contact_company for word in company_filter_lower.split()[:2])  # First 2 words
+                )
+
+                if not company_match:
+                    logger.debug(f"Filtered out {contact.name}: company '{contact.company}' doesn't match '{company_filter}'")
+                    continue
+
+            # Check keywords match in title
+            if keywords_lower:
+                contact_title = (contact.title or "").lower()
+
+                # At least one keyword should be in the title
+                keywords_match = any(kw in contact_title for kw in keywords_lower)
+
+                if not keywords_match:
+                    logger.debug(f"Filtered out {contact.name}: title '{contact.title}' doesn't match keywords '{keywords_filter}'")
+                    continue
+
+            filtered.append(contact)
+
+        logger.info(f"Filtered {len(contacts)} contacts to {len(filtered)} matching criteria")
+        return filtered
+
+    async def _search_via_html(
+        self,
+        query: str,
+        limit: int,
+        company_filter: str | None = None,
+        keywords_filter: str | None = None,
+    ) -> list[LinkedInContact]:
+        """Search by fetching the search page and extracting CSRF, then using API."""
+        # Build search query with filters
+        search_query = query
+        if company_filter and company_filter not in query:
+            search_query = f"{query} {company_filter}".strip()
+
+        contacts = []
         page = 1
         results_per_page = 10
 
@@ -381,9 +515,9 @@ class LinkedInHttpClient:
                 "Referer": f"{self.BASE_URL}/feed/",
             }
 
-            while len(all_contacts) < limit:
+            while len(contacts) < limit and page <= 5:  # Max 5 pages to avoid too many requests
                 # Build URL with pagination
-                search_url = f"{self.BASE_URL}/search/results/people/?keywords={quote(query)}"
+                search_url = f"{self.BASE_URL}/search/results/people/?keywords={quote(search_query)}"
                 if page > 1:
                     search_url += f"&page={page}"
 
@@ -400,54 +534,154 @@ class LinkedInHttpClient:
                         location = location.replace("/m/", "/")
                     response = await client.get(location, headers=html_headers)
 
-                if response.status_code != 200:
-                    logger.warning(f"HTML search page {page} failed: {response.status_code}")
-                    break
-
                 # Save HTML for debugging
                 with open("/tmp/linkedin_search.html", "w") as f:
                     f.write(response.text)
                 logger.info(f"Saved HTML to /tmp/linkedin_search.html ({len(response.text)} bytes)")
 
-                contacts = self._parse_html_search_results(response.text, results_per_page * 2)
+                page_contacts = self._parse_html_search_results(response.text, results_per_page * 2)
 
-                if not contacts:
-                    logger.info(f"No more results on page {page}")
-                    break
+                if not page_contacts:
+                    break  # No more results
 
-                # Add new contacts (avoid duplicates)
-                existing_urls = {c.profile_url for c in all_contacts}
-                new_contacts = [c for c in contacts if c.profile_url not in existing_urls]
-
-                if not new_contacts:
-                    logger.info(f"No new contacts on page {page}, stopping")
-                    break
-
-                all_contacts.extend(new_contacts)
-                logger.info(f"Page {page}: found {len(new_contacts)} new contacts, total: {len(all_contacts)}")
-
-                # Check if we have enough
-                if len(all_contacts) >= limit:
-                    break
-
-                # Limit pages to avoid too many requests (max 10 pages = 100 results)
-                if page >= 10:
-                    logger.info("Reached max pages (10)")
-                    break
-
+                contacts.extend(page_contacts)
                 page += 1
 
-                # Wait between requests like a regular user (1-3 seconds)
-                import random
-                delay = random.uniform(1.0, 3.0)
-                logger.info(f"Waiting {delay:.1f}s before next page...")
-                await asyncio.sleep(delay)
+        except Exception as e:
+            logger.error(f"Error parsing search API results: {e}")
 
-            return all_contacts[:limit]
+        # Deduplicate
+        seen = set()
+        unique = []
+        for c in contacts:
+            key = c.profile_url or c.name
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+
+        return unique
+
+    def _parse_search_page_html(self, html: str) -> list[LinkedInContact]:
+        """Parse contacts directly from search results HTML."""
+        contacts = []
+
+        try:
+            from bs4 import BeautifulSoup
+            import re
+            import json
+
+            soup = BeautifulSoup(html, "lxml")
+
+            # Find all script tags with embedded data
+            for script in soup.find_all("script"):
+                text = script.string
+                if not text:
+                    continue
+
+                # Look for data that contains firstName/lastName
+                if '"firstName"' in text and '"lastName"' in text and '"publicIdentifier"' in text:
+                    # Try to find JSON objects in the script
+                    # Look for patterns like {"firstName":"John","lastName":"Doe",...}
+                    profile_pattern = r'\{[^{}]*"firstName"\s*:\s*"([^"]+)"[^{}]*"lastName"\s*:\s*"([^"]+)"[^{}]*(?:"publicIdentifier"\s*:\s*"([^"]+)")?[^{}]*\}'
+
+                    for match in re.finditer(profile_pattern, text):
+                        first_name = match.group(1)
+                        last_name = match.group(2)
+                        public_id = match.group(3) if match.lastindex >= 3 else None
+
+                        if first_name and last_name:
+                            name = f"{first_name} {last_name}"
+                            if not self._is_invalid_name(name) and len(name) < 100:
+                                profile_url = f"https://www.linkedin.com/in/{public_id}" if public_id else None
+                                contacts.append(LinkedInContact(
+                                    name=name,
+                                    profile_url=profile_url,
+                                ))
 
         except Exception as e:
-            logger.error(f"HTML search error: {e}")
-            return all_contacts[:limit] if all_contacts else []
+            logger.error(f"Error parsing search page HTML: {e}")
+
+        # Deduplicate
+        seen = set()
+        unique = []
+        for c in contacts:
+            key = c.profile_url or c.name
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+
+        return unique
+
+    async def _search_connections(self, query: str, limit: int) -> list[LinkedInContact]:
+        """Search user's connections which has more reliable data."""
+        try:
+            client = await self._get_client()
+            headers = {**self.DEFAULT_HEADERS}
+            if self._csrf_token:
+                headers["Csrf-Token"] = self._csrf_token
+
+            # Search in connections
+            connections_url = (
+                f"{self.VOYAGER_API}/relationships/dash/connections"
+                f"?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16"
+                f"&count={limit}"
+                f"&q=search"
+                f"&sortType=RECENTLY_ADDED"
+                f"&keywords={quote(query)}"
+            )
+
+            response = await client.get(connections_url, headers=headers)
+
+            if response.status_code == 200:
+                data = response.json()
+                return self._parse_connections_results(data)
+
+            logger.warning(f"Connections API failed: {response.status_code}")
+            return []
+
+        except Exception as e:
+            logger.error(f"Connections search error: {e}")
+            return []
+
+    def _parse_connections_results(self, data: dict) -> list[LinkedInContact]:
+        """Parse connections API results."""
+        contacts = []
+
+        try:
+            # Check included array for profile data
+            included = data.get("included", [])
+            for item in included:
+                item_type = item.get("$type", "")
+                if "Profile" in item_type or "MiniProfile" in item_type:
+                    first_name = item.get("firstName", "")
+                    last_name = item.get("lastName", "")
+
+                    if isinstance(first_name, str) and isinstance(last_name, str) and first_name and last_name:
+                        name = f"{first_name} {last_name}"
+                        if not self._is_invalid_name(name):
+                            public_id = item.get("publicIdentifier", "")
+                            profile_url = f"https://www.linkedin.com/in/{public_id}" if public_id else None
+                            headline = item.get("headline", "") or item.get("occupation", "")
+
+                            contacts.append(LinkedInContact(
+                                name=name,
+                                title=headline if headline else None,
+                                profile_url=profile_url,
+                            ))
+
+        except Exception as e:
+            logger.error(f"Error parsing connections results: {e}")
+
+        # Deduplicate
+        seen = set()
+        unique = []
+        for c in contacts:
+            key = c.profile_url or c.name
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+
+        return unique
 
     def _parse_html_search_results(self, html: str, limit: int) -> list[LinkedInContact]:
         """Parse LinkedIn search results from HTML.

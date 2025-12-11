@@ -11,6 +11,11 @@ import type {
   LinkedInVerifyCodeRequest,
   LinkedInSearchRequest,
   LinkedInSearchResponse,
+  LinkedInCompanySearchRequest,
+  LinkedInCompanySearchResponse,
+  SearchSessionResponse,
+  SearchResultsPageResponse,
+  SearchSessionStatusResponse,
 } from '../types/linkedin';
 
 export const linkedInApi = {
@@ -66,6 +71,14 @@ export const linkedInApi = {
   },
 
   /**
+   * Search for contacts at specific companies (from Excel import)
+   */
+  searchByCompanies: async (data: LinkedInCompanySearchRequest): Promise<LinkedInCompanySearchResponse> => {
+    const response = await apiClient.post<LinkedInCompanySearchResponse>('/linkedin/search-companies', data);
+    return response.data;
+  },
+
+  /**
    * Disconnect from LinkedIn (admin only)
    */
   disconnect: async (): Promise<void> => {
@@ -86,6 +99,38 @@ export const linkedInApi = {
    */
   validateSession: async (): Promise<LinkedInConnectResponse> => {
     const response = await apiClient.post<LinkedInConnectResponse>('/linkedin/validate-session');
+    return response.data;
+  },
+
+  /**
+   * Start a streaming search for contacts at companies
+   * Returns a session ID to poll for results
+   */
+  startSearchStream: async (data: LinkedInCompanySearchRequest): Promise<SearchSessionResponse> => {
+    const response = await apiClient.post<SearchSessionResponse>('/linkedin/search-stream', data);
+    return response.data;
+  },
+
+  /**
+   * Get search session status
+   */
+  getSearchSessionStatus: async (sessionId: string): Promise<SearchSessionStatusResponse> => {
+    const response = await apiClient.get<SearchSessionStatusResponse>(`/linkedin/search-session/${sessionId}/status`);
+    return response.data;
+  },
+
+  /**
+   * Get paginated results from a search session
+   */
+  getSearchSessionResults: async (
+    sessionId: string,
+    page: number = 1,
+    pageSize: number = 20
+  ): Promise<SearchResultsPageResponse> => {
+    const response = await apiClient.get<SearchResultsPageResponse>(
+      `/linkedin/search-session/${sessionId}/results`,
+      { params: { page, page_size: pageSize } }
+    );
     return response.data;
   },
 };

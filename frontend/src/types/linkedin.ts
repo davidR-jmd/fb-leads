@@ -38,6 +38,12 @@ export interface LinkedInSearchRequest {
   limit?: number; // Default 50, max 100
 }
 
+export interface LinkedInCompanySearchRequest {
+  companies: string[]; // List of company names from Excel
+  keywords?: string; // Additional search keywords (e.g., "Directeur Marketing")
+  limit_per_company?: number; // Default 10
+}
+
 export interface LinkedInStatusResponse {
   status: LinkedInStatus;
   email?: string | null;
@@ -63,4 +69,39 @@ export interface LinkedInSearchResponse {
   contacts: LinkedInContact[];
   query: string;
   total_found: number;
+}
+
+export interface LinkedInCompanySearchResponse {
+  contacts: LinkedInContact[];
+  companies_searched: number;
+  total_found: number;
+  keywords: string;
+}
+
+export interface SearchSessionResponse {
+  session_id: string;
+  status: string;
+  total_companies: number;
+  message: string;
+}
+
+export interface SearchResultsPageResponse {
+  results: LinkedInContact[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  companies_searched: number;
+  total_companies: number;
+  status: string;
+}
+
+export interface SearchSessionStatusResponse {
+  session_id: string;
+  status: string;
+  companies_searched: number;
+  total_companies: number;
+  total_results: number;
+  keywords: string;
+  created_at: string;
 }

@@ -51,6 +51,14 @@ class LinkedInSearchRequest(BaseModel):
     limit: int = 50  # Default 50 results, max 100
 
 
+class LinkedInCompanySearchRequest(BaseModel):
+    """Request to search LinkedIn by company list + keywords."""
+
+    companies: list[str]  # List of company names from Excel
+    keywords: str = ""  # Additional search keywords (e.g., "Directeur Marketing")
+    limit_per_company: int = 10  # Results per company (default 10)
+
+
 class LinkedInStatusResponse(BaseModel):
     """Response with LinkedIn connection status."""
 
@@ -76,6 +84,7 @@ class LinkedInContact(BaseModel):
     company: str | None = None
     location: str | None = None
     profile_url: str | None = None
+    image_url: str | None = None
 
 
 class LinkedInSearchResponse(BaseModel):
@@ -84,3 +93,46 @@ class LinkedInSearchResponse(BaseModel):
     contacts: list[LinkedInContact]
     query: str
     total_found: int
+
+
+class LinkedInCompanySearchResponse(BaseModel):
+    """Response with LinkedIn company search results."""
+
+    contacts: list[LinkedInContact]
+    companies_searched: int
+    total_found: int
+    keywords: str
+
+
+class SearchSessionResponse(BaseModel):
+    """Response when starting a search session."""
+
+    session_id: str
+    status: str
+    total_companies: int
+    message: str
+
+
+class SearchResultsPageResponse(BaseModel):
+    """Paginated search results response."""
+
+    results: list[LinkedInContact]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    companies_searched: int
+    total_companies: int
+    status: str
+
+
+class SearchSessionStatusResponse(BaseModel):
+    """Search session status response."""
+
+    session_id: str
+    status: str
+    companies_searched: int
+    total_companies: int
+    total_results: int
+    keywords: str
+    created_at: str

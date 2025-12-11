@@ -13,6 +13,7 @@ from app.linkedin.schemas import (
     LinkedInStatusResponse,
     LinkedInConnectResponse,
     LinkedInSearchResponse,
+    LinkedInCompanySearchResponse,
 )
 from app.linkedin.exceptions import (
     LinkedInNotConfiguredError,
@@ -50,12 +51,42 @@ class LinkedInService:
             logger.info("LinkedIn not connected, skipping initialization")
             return
 
+        auth_method = config.get("auth_method")
+
+        # Handle cookie-based auth - restore cookie to HTTP client
+        if auth_method == LinkedInAuthMethod.COOKIE.value:
+            try:
+                encrypted_cookie = config.get("encrypted_cookie")
+                if encrypted_cookie:
+                    cookie = self._encryption.decrypt(encrypted_cookie)
+                    http_client = get_linkedin_http_client()
+                    http_client.set_cookie(cookie)
+
+                    # Validate the session
+                    logger.info("Validating restored LinkedIn cookie session...")
+                    is_valid = await http_client.validate_session()
+
+                    if is_valid:
+                        logger.info("LinkedIn cookie session restored successfully")
+                    else:
+                        logger.warning("LinkedIn cookie expired, marking as disconnected")
+                        await self._repository.update_status(LinkedInStatus.DISCONNECTED)
+                else:
+                    logger.warning("No encrypted cookie found, marking as disconnected")
+                    await self._repository.update_status(LinkedInStatus.DISCONNECTED)
+
+            except Exception as e:
+                logger.error(f"Failed to restore LinkedIn cookie session: {e}")
+                await self._repository.update_status(LinkedInStatus.DISCONNECTED)
+            return
+
+        # Handle browser-based auth (credentials or manual)
         try:
-            logger.info("Attempting to restore LinkedIn session...")
+            logger.info("Attempting to restore LinkedIn browser session...")
             await self._browser.launch()
 
             if await self._browser.validate_session():
-                logger.info("LinkedIn session restored successfully")
+                logger.info("LinkedIn browser session restored successfully")
             else:
                 logger.warning("LinkedIn session expired, marking as disconnected")
                 await self._repository.update_status(LinkedInStatus.DISCONNECTED)
@@ -279,6 +310,97 @@ class LinkedInService:
             contacts=contacts,
             query=query,
             total_found=len(contacts),
+        )
+
+    async def search_by_companies(
+        self,
+        companies: list[str],
+        keywords: str = "",
+        limit_per_company: int = 10,
+    ) -> LinkedInCompanySearchResponse:
+        """Search for contacts at specific companies.
+
+        Args:
+            companies: List of company names from Excel
+            keywords: Additional search keywords (e.g., "Directeur Marketing")
+            limit_per_company: Max results per company (default 10)
+
+        Returns:
+            Combined results from all companies
+        """
+        import asyncio
+
+        # Check auth method and use appropriate client
+        config = await self._repository.get_config()
+
+        if not config:
+            raise LinkedInNotConfiguredError()
+
+        auth_method = config.get("auth_method")
+        all_contacts = []
+
+        # If connected via cookie, use HTTP client
+        if auth_method == LinkedInAuthMethod.COOKIE.value:
+            http_client = get_linkedin_http_client()
+
+            # Restore cookie if not set
+            if not http_client.has_cookie():
+                encrypted_cookie = config.get("encrypted_cookie")
+                if encrypted_cookie:
+                    cookie = self._encryption.decrypt(encrypted_cookie)
+                    http_client.set_cookie(cookie)
+
+            # Search for each company
+            for company in companies:
+                # Build search query: "keywords" at "company"
+                if keywords.strip():
+                    query = f"{keywords.strip()} {company}"
+                else:
+                    query = company
+
+                logger.info(f"Searching: {query}")
+                contacts = await http_client.search_people(query, limit=limit_per_company)
+
+                # Tag contacts with the company searched
+                for contact in contacts:
+                    if not contact.company:
+                        contact.company = company
+
+                all_contacts.extend(contacts)
+
+                # Small delay between company searches to avoid rate limiting
+                if len(companies) > 1:
+                    await asyncio.sleep(1.5)
+
+            return LinkedInCompanySearchResponse(
+                contacts=all_contacts,
+                companies_searched=len(companies),
+                total_found=len(all_contacts),
+                keywords=keywords,
+            )
+
+        # Otherwise use browser (for manual/credentials auth)
+        if not self._browser.is_running():
+            await self._auto_reconnect()
+
+        if self._browser.is_busy():
+            raise LinkedInBrowserBusyError()
+
+        # Browser-based search (simplified - one query at a time)
+        for company in companies:
+            if keywords.strip():
+                query = f"{keywords.strip()} {company}"
+            else:
+                query = company
+
+            contacts = await self._browser.search_people(query)
+            all_contacts.extend(contacts[:limit_per_company])
+
+        return LinkedInCompanySearchResponse(
+            contacts=all_contacts,
+            companies_searched=len(companies),
+            total_found=len(all_contacts),
+            keywords=keywords,
         )
 
     async def disconnect(self) -> None:
