@@ -344,21 +344,30 @@ class LinkedInService:
     async def search_by_companies(
         self,
         companies: list[str],
-        keywords: str = "",
+        keywords: list[str] | None = None,
         limit_per_company: int = 10,
     ) -> LinkedInCompanySearchResponse:
-        """Search for contacts at specific companies.
+        """Search for contacts at specific companies with multiple job functions.
 
         Args:
             companies: List of company names from Excel
-            keywords: Additional search keywords (e.g., "Directeur Marketing")
-            limit_per_company: Max results per company (default 10)
+            keywords: List of job functions/keywords (e.g., ["Directeur Marketing", "CEO"])
+            limit_per_company: Max results per company per keyword (default 10)
 
         Returns:
-            Combined results from all companies
+            Combined results from all companies and keywords
         """
         import asyncio
         import random
+
+        # Normalize keywords
+        if keywords is None:
+            keywords = []
+        keywords = [k.strip() for k in keywords if k.strip()]
+
+        # If no keywords, just search by company name
+        if not keywords:
+            keywords = [""]
 
         # Check auth method and use appropriate client
         config = await self._repository.get_config()
@@ -369,6 +378,7 @@ class LinkedInService:
         auth_method = config.get("auth_method")
         all_contacts = []
         searches_done = 0
+        total_searches = len(companies) * len(keywords)
 
         # If connected via cookie, use HTTP client
         if auth_method == LinkedInAuthMethod.COOKIE.value:
@@ -381,45 +391,46 @@ class LinkedInService:
                     cookie = self._encryption.decrypt(encrypted_cookie)
                     http_client.set_cookie(cookie)
 
-            # Search for each company
+            # Search for each company with each keyword
             for company in companies:
-                # Check rate limit before each company search
-                await self._check_rate_limit()
+                for keyword in keywords:
+                    # Check rate limit before each search
+                    await self._check_rate_limit()
 
-                # Build search query: "keywords" at "company"
-                if keywords.strip():
-                    query = f"{keywords.strip()} {company}"
-                else:
-                    query = company
+                    # Build search query: "keyword" at "company"
+                    if keyword:
+                        query = f"{keyword} {company}"
+                    else:
+                        query = company
 
-                logger.info(f"Searching: {query}")
-                contacts = await http_client.search_people(query, limit=limit_per_company)
+                    logger.info(f"Searching ({searches_done + 1}/{total_searches}): {query}")
+                    contacts = await http_client.search_people(query, limit=limit_per_company)
 
-                # Record search for rate limiting
-                await self._record_search()
-                searches_done += 1
+                    # Record search for rate limiting
+                    await self._record_search()
+                    searches_done += 1
 
-                # Tag contacts with the company searched
-                for contact in contacts:
-                    if not contact.company:
-                        contact.company = company
+                    # Tag contacts with the company and keyword searched
+                    for contact in contacts:
+                        if not contact.company:
+                            contact.company = company
 
-                all_contacts.extend(contacts)
+                    all_contacts.extend(contacts)
 
-                # Human-like delay between company searches to avoid rate limiting
-                if len(companies) > 1:
-                    delay = random.uniform(2.0, 5.0)
-                    # Occasional longer pause (every ~5 searches) like a human taking a break
-                    if searches_done % 5 == 0:
-                        delay += random.uniform(3.0, 8.0)
-                        logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
-                    await asyncio.sleep(delay)
+                    # Human-like delay between searches to avoid rate limiting
+                    if total_searches > 1:
+                        delay = random.uniform(2.0, 5.0)
+                        # Occasional longer pause (every ~5 searches) like a human taking a break
+                        if searches_done % 5 == 0:
+                            delay += random.uniform(3.0, 8.0)
+                            logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
+                        await asyncio.sleep(delay)
 
             return LinkedInCompanySearchResponse(
                 contacts=all_contacts,
                 companies_searched=len(companies),
                 total_found=len(all_contacts),
-                keywords=keywords,
+                keywords=", ".join(keywords) if keywords[0] else "",
             )
 
         # Otherwise use browser (for manual/credentials auth)
@@ -429,35 +440,36 @@ class LinkedInService:
         if self._browser.is_busy():
             raise LinkedInBrowserBusyError()
 
-        # Browser-based search (simplified - one query at a time)
+        # Browser-based search
         for company in companies:
-            # Check rate limit before each company search
-            await self._check_rate_limit()
+            for keyword in keywords:
+                # Check rate limit before each search
+                await self._check_rate_limit()
 
-            if keywords.strip():
-                query = f"{keywords.strip()} {company}"
-            else:
-                query = company
+                if keyword:
+                    query = f"{keyword} {company}"
+                else:
+                    query = company
 
-            contacts = await self._browser.search_people(query)
-            all_contacts.extend(contacts[:limit_per_company])
+                contacts = await self._browser.search_people(query)
+                all_contacts.extend(contacts[:limit_per_company])
 
-            # Record search for rate limiting
-            await self._record_search()
-            searches_done += 1
+                # Record search for rate limiting
+                await self._record_search()
+                searches_done += 1
 
-            # Human-like delay between searches
-            if len(companies) > 1:
-                delay = random.uniform(2.0, 5.0)
-                if searches_done % 5 == 0:
-                    delay += random.uniform(3.0, 8.0)
-                await asyncio.sleep(delay)
+                # Human-like delay between searches
+                if total_searches > 1:
+                    delay = random.uniform(2.0, 5.0)
+                    if searches_done % 5 == 0:
+                        delay += random.uniform(3.0, 8.0)
+                    await asyncio.sleep(delay)
 
         return LinkedInCompanySearchResponse(
             contacts=all_contacts,
             companies_searched=len(companies),
             total_found=len(all_contacts),
-            keywords=keywords,
+            keywords=", ".join(keywords) if keywords[0] else "",
         )
 
     async def disconnect(self) -> None:

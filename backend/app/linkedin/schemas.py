@@ -55,7 +55,7 @@ class LinkedInCompanySearchRequest(BaseModel):
     """Request to search LinkedIn by company list + keywords."""
 
     companies: list[str]  # List of company names from Excel
-    keywords: str = ""  # Additional search keywords (e.g., "Directeur Marketing")
+    keywords: list[str] = []  # List of job functions/keywords (e.g., ["Directeur Marketing", "CEO"])
     limit_per_company: int = 10  # Results per company (default 10)
 
 

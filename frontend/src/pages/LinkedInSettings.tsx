@@ -7,7 +7,7 @@
  * 2. Fallback: Manual login in visible browser window
  */
 import React, { useEffect, useState } from 'react';
-import { Linkedin, HelpCircle, ChevronDown, ChevronUp, ExternalLink, Clock, Activity, AlertTriangle } from 'lucide-react';
+import { Linkedin, HelpCircle, ChevronDown, ChevronUp, ExternalLink, Clock, Activity, AlertTriangle, RotateCcw } from 'lucide-react';
 import { linkedInApi } from '../api/linkedin.api';
 import { LinkedInStatus, LinkedInAuthMethod, type LinkedInStatusResponse, type RateLimitStatus } from '../types/linkedin';
 import { TRANSLATIONS } from '../constants/translations';
@@ -80,8 +80,22 @@ function ProgressBar({ current, max, color = 'blue' }: { current: number; max: n
 /**
  * Rate limit status card component
  */
-function RateLimitCard({ rateLimit }: { rateLimit: RateLimitStatus | null }) {
+function RateLimitCard({ rateLimit, onReset }: { rateLimit: RateLimitStatus | null; onReset: () => Promise<void> }) {
+  const [isResetting, setIsResetting] = useState(false);
+
   if (!rateLimit) return null;
+
+  const handleReset = async () => {
+    if (!window.confirm('Réinitialiser les quotas de recherche ?')) {
+      return;
+    }
+    setIsResetting(true);
+    try {
+      await onReset();
+    } finally {
+      setIsResetting(false);
+    }
+  };
 
   const hourlyUsage = rateLimit.searches_this_hour;
   const hourlyLimit = rateLimit.limits.per_hour;
@@ -159,11 +173,19 @@ function RateLimitCard({ rateLimit }: { rateLimit: RateLimitStatus | null }) {
             </div>
           )}
 
-          {/* Total searches */}
-          <div className="pt-2 border-t border-slate-100">
+          {/* Total searches and reset button */}
+          <div className="pt-2 border-t border-slate-100 flex justify-between items-center">
             <p className="text-xs text-slate-500">
               Total des recherches : <span className="font-medium text-slate-700">{rateLimit.total_searches}</span>
             </p>
+            <button
+              onClick={handleReset}
+              disabled={isResetting}
+              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-600 bg-slate-100 rounded hover:bg-slate-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RotateCcw size={12} className={isResetting ? 'animate-spin' : ''} />
+              {isResetting ? 'Réinitialisation...' : 'Réinitialiser'}
+            </button>
           </div>
         </div>
       </div>
@@ -346,6 +368,17 @@ export default function LinkedInSettings() {
       setError(err.response?.data?.detail || 'Erreur lors de la validation');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleResetRateLimits = async () => {
+    try {
+      await linkedInApi.resetRateLimits();
+      const rateLimit = await linkedInApi.getRateLimitStatus();
+      setRateLimitData(rateLimit);
+      setSuccessMessage('Quotas réinitialisés avec succès');
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Erreur lors de la réinitialisation');
     }
   };
 
@@ -621,7 +654,7 @@ export default function LinkedInSettings() {
       </div>
 
       {/* Rate Limit Status Card - Only show when connected */}
-      {isConnected && <RateLimitCard rateLimit={rateLimitData} />}
+      {isConnected && <RateLimitCard rateLimit={rateLimitData} onReset={handleResetRateLimits} />}
 
       {/* Verification Modal */}
       <LinkedInVerifyModal
