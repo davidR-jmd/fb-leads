@@ -92,9 +92,10 @@ export interface CompanyLookupRequest {
 
 export interface ProspectResult {
   company: CompanyData;
-  contact?: ContactData | null;
+  contacts: ContactData[];  // Multiple LinkedIn profiles
   searched_function: string;
   linkedin_found: boolean;
+  profiles_count: number;  // Number of profiles found
   source: string;
 }
 
@@ -133,24 +134,51 @@ export interface DepartementOption {
   name: string;
 }
 
-// Common French departments
+// Common French departments (Ile-de-France first, then alphabetical)
 export const FRENCH_DEPARTEMENTS: DepartementOption[] = [
+  // Ile-de-France
   { code: '75', name: 'Paris' },
-  { code: '69', name: 'Rhone' },
-  { code: '13', name: 'Bouches-du-Rhone' },
-  { code: '31', name: 'Haute-Garonne' },
-  { code: '33', name: 'Gironde' },
-  { code: '59', name: 'Nord' },
-  { code: '67', name: 'Bas-Rhin' },
+  { code: '77', name: 'Seine-et-Marne' },
+  { code: '78', name: 'Yvelines' },
+  { code: '91', name: 'Essonne' },
   { code: '92', name: 'Hauts-de-Seine' },
   { code: '93', name: 'Seine-Saint-Denis' },
   { code: '94', name: 'Val-de-Marne' },
-  { code: '44', name: 'Loire-Atlantique' },
-  { code: '34', name: 'Herault' },
+  { code: '95', name: 'Val-d\'Oise' },
+  // Other major departments
   { code: '06', name: 'Alpes-Maritimes' },
-  { code: '78', name: 'Yvelines' },
-  { code: '91', name: 'Essonne' },
+  { code: '13', name: 'Bouches-du-Rhone' },
+  { code: '31', name: 'Haute-Garonne' },
+  { code: '33', name: 'Gironde' },
+  { code: '34', name: 'Herault' },
+  { code: '44', name: 'Loire-Atlantique' },
+  { code: '59', name: 'Nord' },
+  { code: '67', name: 'Bas-Rhin' },
+  { code: '69', name: 'Rhone' },
 ];
+
+// Company type options
+export type CompanyType = 'all' | 'private' | 'public';
+
+// Employee range presets
+export const EMPLOYEE_RANGES = [
+  { label: 'Toutes tailles', min: undefined, max: undefined },
+  { label: '1-10 employes', min: 1, max: 10 },
+  { label: '11-50 employes', min: 11, max: 50 },
+  { label: '51-200 employes', min: 51, max: 200 },
+  { label: '201-500 employes', min: 201, max: 500 },
+  { label: '500+ employes', min: 500, max: undefined },
+] as const;
+
+// Revenue range presets (in euros)
+export const REVENUE_RANGES = [
+  { label: 'Tous CA', min: undefined, max: undefined },
+  { label: '< 1M EUR', min: undefined, max: 1_000_000 },
+  { label: '1M - 10M EUR', min: 1_000_000, max: 10_000_000 },
+  { label: '10M - 50M EUR', min: 10_000_000, max: 50_000_000 },
+  { label: '50M - 100M EUR', min: 50_000_000, max: 100_000_000 },
+  { label: '100M+ EUR', min: 100_000_000, max: undefined },
+] as const;
 
 // Common job functions
 export const COMMON_JOB_FUNCTIONS = [

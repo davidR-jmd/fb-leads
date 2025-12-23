@@ -206,9 +206,13 @@ class ProspectRepository:
         if doc:
             # Check if expired
             expires_at = doc.get("expires_at")
-            if expires_at and expires_at < datetime.now(timezone.utc):
-                logger.debug(f"Cache expired for SIREN {siren}")
-                return None
+            if expires_at:
+                # Make naive datetime aware (MongoDB stores as UTC)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at < datetime.now(timezone.utc):
+                    logger.debug(f"Cache expired for SIREN {siren}")
+                    return None
 
         return doc
 
@@ -239,8 +243,12 @@ class ProspectRepository:
         if doc:
             # Check if expired
             expires_at = doc.get("expires_at")
-            if expires_at and expires_at < datetime.now(timezone.utc):
-                return None
+            if expires_at:
+                # Make naive datetime aware (MongoDB stores as UTC)
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if expires_at < datetime.now(timezone.utc):
+                    return None
 
         return doc
 

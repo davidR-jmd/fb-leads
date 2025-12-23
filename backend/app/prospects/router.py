@@ -164,19 +164,21 @@ async def get_search_results(
             creation_date=r.get("company_creation_date"),
         )
 
-        contact = None
-        if r.get("contact_linkedin_url") or r.get("contact_name"):
-            contact = ContactData(
-                name=r.get("contact_name"),
-                title=r.get("contact_title"),
-                linkedin_url=r.get("contact_linkedin_url"),
-            )
+        # Build contacts list from stored data
+        contacts = []
+        for c in r.get("contacts", []):
+            contacts.append(ContactData(
+                name=c.get("name"),
+                title=c.get("title"),
+                linkedin_url=c.get("linkedin_url"),
+            ))
 
         results.append(ProspectResult(
             company=company,
-            contact=contact,
+            contacts=contacts,
             searched_function=r.get("searched_function", ""),
             linkedin_found=r.get("linkedin_found", False),
+            profiles_count=r.get("profiles_count", len(contacts)),
             source=r.get("source", "pappers"),
         ))
 

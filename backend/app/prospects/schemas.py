@@ -130,9 +130,10 @@ class CompanyLookupRequest(BaseModel):
 class ProspectResult(BaseModel):
     """A single prospect result."""
     company: CompanyData
-    contact: ContactData | None = None
+    contacts: list[ContactData] = []  # Multiple LinkedIn profiles
     searched_function: str
     linkedin_found: bool = False
+    profiles_count: int = 0  # Number of profiles found
     source: str = "pappers"  # pappers, excel, google
 
 

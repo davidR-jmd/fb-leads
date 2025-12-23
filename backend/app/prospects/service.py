@@ -172,6 +172,15 @@ class ProspectService:
         # For filtered search without specific company, search Pappers
         filters = request.filters
         if filters:
+            # Map is_public to forme_juridique
+            # SA = public company (Societe Anonyme)
+            # SAS, SARL = private companies
+            forme_juridique = None
+            if filters.is_public is True:
+                forme_juridique = "SA"
+            elif filters.is_public is False:
+                forme_juridique = "SAS"  # Most common private form
+
             companies = await self._pappers.search_companies(
                 departement=filters.departements,
                 effectif_min=filters.size_min,
@@ -179,6 +188,7 @@ class ProspectService:
                 ca_min=filters.revenue_min,
                 ca_max=filters.revenue_max,
                 code_naf=filters.industry_naf,
+                forme_juridique=forme_juridique,
             )
 
             if not companies:

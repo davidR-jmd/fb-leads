@@ -49,6 +49,69 @@ class GoogleSearchClient:
             await self._client.aclose()
             self._client = None
 
+    def _normalize_company_name(self, company_name: str) -> str:
+        """Normalize company name for better LinkedIn search results.
+
+        Removes legal suffixes and simplifies the name.
+        """
+        # Remove common French legal suffixes
+        suffixes_to_remove = [
+            r"\s+SAS$", r"\s+SARL$", r"\s+SA$", r"\s+EURL$", r"\s+SCI$",
+            r"\s+SNC$", r"\s+SASU$", r"\s+SCOP$", r"\s+GIE$",
+            r"\s+\(.*?\)$",  # Remove parenthetical suffixes like "(LYON)"
+        ]
+        normalized = company_name.upper()
+        for pattern in suffixes_to_remove:
+            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+
+        # Remove common prefixes
+        prefixes_to_remove = [
+            r"^SOCIETE\s+", r"^STE\s+", r"^GROUPE\s+", r"^ETS\s+",
+            r"^ETABLISSEMENTS\s+", r"^LABORATOIRES?\s+",
+        ]
+        for pattern in prefixes_to_remove:
+            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+
+        # If name is very long, take first 3-4 significant words
+        words = normalized.split()
+        if len(words) > 4:
+            # Keep first 3 words that are not common filler words
+            filler_words = {"ET", "DE", "DU", "DES", "LA", "LE", "LES", "D", "L", "A", "AU", "AUX"}
+            significant_words = [w for w in words if w not in filler_words][:3]
+            if significant_words:
+                normalized = " ".join(significant_words)
+
+        return normalized.strip()
+
+    def _extract_brand_name(self, company_name: str) -> str:
+        """Extract the brand/trade name from a company name.
+
+        For complex legal names like "FNAC DARTY SA" or "CARREFOUR HYPERMARCHES",
+        extracts just the brand name for better Google search results.
+
+        Args:
+            company_name: Full company name
+
+        Returns:
+            Brand name (first significant word)
+        """
+        normalized = self._normalize_company_name(company_name)
+
+        # Common filler words to skip
+        filler_words = {
+            "ET", "DE", "DU", "DES", "LA", "LE", "LES", "D", "L", "A", "AU", "AUX",
+            "FRANCE", "PARIS", "INTERNATIONAL", "EUROPE", "SERVICES", "SOLUTIONS",
+            "CONSULTING", "TECHNOLOGIES", "GROUPE", "HOLDING", "DISTRIBUTION",
+        }
+
+        words = normalized.split()
+        for word in words:
+            if word not in filler_words and len(word) >= 3:
+                return word
+
+        # Fallback to first word
+        return words[0] if words else company_name
+
     async def find_linkedin_profile(
         self,
         job_function: str,
@@ -69,57 +132,103 @@ class GoogleSearchClient:
             logger.error("Google Search API key or CX not configured")
             return []
 
+        # Normalize company name and extract brand for better results
+        normalized_name = self._normalize_company_name(company_name)
+        brand_name = self._extract_brand_name(company_name)
+
+        logger.info(f"Company search: original='{company_name}' | brand='{brand_name}' | normalized='{normalized_name}'")
+
+        # Try multiple query strategies - prioritize simpler queries (brand name first)
+        queries = [
+            # Strategy 1: Brand name only (most likely to work)
+            f'{job_function} {brand_name.lower()} site:linkedin.com',
+            # Strategy 2: Normalized name
+            f'{job_function} {normalized_name.lower()} site:linkedin.com',
+        ]
+
+        # Add original name if different
+        if company_name.lower() != brand_name.lower() and company_name.lower() != normalized_name.lower():
+            queries.append(f'{job_function} {company_name.lower()} site:linkedin.com')
+
+        all_contacts: list[ContactData] = []
+        seen_urls: set[str] = set()
+
         try:
             client = await self._get_client()
 
-            # Build search query targeting LinkedIn profiles
-            query = f'{job_function} "{company_name}" site:linkedin.com/in'
+            for query in queries:
+                if len(all_contacts) >= max_results:
+                    break
 
-            response = await client.get(
-                self.BASE_URL,
-                params={
-                    "key": self._api_key,
-                    "cx": self._cx,
-                    "q": query,
-                    "num": 10,  # Get top 10 results to filter
-                },
-            )
+                logger.info(f"Google Search query: {query}")
 
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get("items", [])
+                response = await client.get(
+                    self.BASE_URL,
+                    params={
+                        "key": self._api_key,
+                        "cx": self._cx,
+                        "q": query,
+                        "num": 10,
+                    },
+                )
 
-                contacts = []
-                seen_urls = set()  # Avoid duplicates
+                if response.status_code == 200:
+                    data = response.json()
+                    items = data.get("items", [])
+                    logger.info(f"Google returned {len(items)} results")
 
-                for item in items:
-                    link = item.get("link", "")
-                    if "linkedin.com/in/" in link:
+                    for item in items:
+                        if len(all_contacts) >= max_results:
+                            break
+
+                        link = item.get("link", "")
+                        title = item.get("title", "")
+                        snippet = item.get("snippet", "")[:100]
+
+                        # Only accept personal profiles (/in/)
+                        if "linkedin.com/in/" not in link:
+                            logger.info(f"SKIP (not profile): {title} | {link}")
+                            continue
+
+                        # Validate company match
+                        if not self._result_matches_company(item, company_name, normalized_name, brand_name):
+                            logger.info(f"SKIP (company): {title} | {link}")
+                            continue
+
+                        # Job function validation is lenient - log but don't reject
+                        job_match = self._result_matches_job_function(item, job_function)
+                        if job_match:
+                            logger.info(f"MATCH (exact): {title} | {link}")
+                        else:
+                            logger.info(f"MATCH (company only): {title} | {link}")
+
                         contact = self._parse_result(item, job_function)
                         if contact and contact.linkedin_url and contact.linkedin_url not in seen_urls:
                             seen_urls.add(contact.linkedin_url)
-                            contacts.append(contact)
-                            if len(contacts) >= max_results:
-                                break
+                            all_contacts.append(contact)
 
-                if not contacts:
-                    logger.info(f"No LinkedIn profile found for: {job_function} at {company_name}")
+                    # If we found results with this query, stop trying other queries
+                    if all_contacts:
+                        break
+
+                elif response.status_code == 403:
+                    logger.error("Google Search API: Quota exceeded or invalid API key")
+                    break
+
+                elif response.status_code == 429:
+                    logger.warning("Google Search API: Rate limit exceeded")
+                    break
+
                 else:
-                    logger.info(f"Found {len(contacts)} LinkedIn profiles for: {job_function} at {company_name}")
+                    logger.warning(f"Google Search API error for query '{query}': {response.status_code}")
+                    continue
 
-                return contacts
-
-            elif response.status_code == 403:
-                logger.error("Google Search API: Quota exceeded or invalid API key")
-                return []
-
-            elif response.status_code == 429:
-                logger.warning("Google Search API: Rate limit exceeded")
-                return []
-
+            if not all_contacts:
+                logger.info(f"No LinkedIn profile found for: {job_function} at {company_name} (normalized: {normalized_name})")
             else:
-                logger.error(f"Google Search API error: {response.status_code} - {response.text}")
-                return []
+                logger.info(f"Found {len(all_contacts)} LinkedIn profiles for: {job_function} at {company_name}")
+
+            return all_contacts
 
         except Exception as e:
             logger.error(f"Google Search API request failed: {e}")
@@ -300,6 +409,145 @@ class GoogleSearchClient:
             url = f"https://{url}"
 
         return url
+
+    def _result_matches_company(
+        self,
+        item: dict[str, Any],
+        company_name: str,
+        normalized_name: str,
+        brand_name: str | None = None,
+    ) -> bool:
+        """Check if a Google search result matches the target company.
+
+        Validates that the LinkedIn profile result actually belongs to someone
+        working at the specified company by checking if the brand name appears
+        in the title or snippet.
+
+        Args:
+            item: Google search result item
+            company_name: Original company name
+            normalized_name: Normalized company name
+            brand_name: Extracted brand name (most important for matching)
+
+        Returns:
+            True if the result appears to match the company, False otherwise
+        """
+        title = item.get("title", "").lower()
+        snippet = item.get("snippet", "").lower()
+        combined_text = f"{title} {snippet}"
+
+        # Filter out common French words that shouldn't match alone
+        stopwords = {
+            "societe", "groupe", "france", "paris", "lyon", "marseille",
+            "international", "consulting", "services", "solutions", "technologies",
+            "chez", "the", "and", "les", "des", "pour", "avec", "holding",
+            "distribution", "europe", "management",
+        }
+
+        # Priority 1: Check brand name (most reliable)
+        if brand_name:
+            brand_lower = brand_name.lower()
+            if brand_lower not in stopwords and len(brand_lower) >= 3:
+                if brand_lower in combined_text:
+                    return True
+
+        # Priority 2: Check normalized name words
+        normalized_words = [w.lower() for w in normalized_name.split() if len(w) >= 3]
+        for word in normalized_words:
+            if word in stopwords:
+                continue
+            if word in combined_text:
+                return True
+
+        # Priority 3: Check original company name words
+        company_words = [w.lower() for w in company_name.split() if len(w) >= 3]
+        for word in company_words:
+            if word in stopwords:
+                continue
+            if word in combined_text:
+                return True
+
+        return False
+
+    def _result_matches_job_function(
+        self,
+        item: dict[str, Any],
+        job_function: str,
+    ) -> bool:
+        """Check if a Google search result matches the target job function.
+
+        Validates that the LinkedIn profile result shows someone with a matching
+        job title by checking if ALL significant words from the job function
+        appear in the title or snippet.
+
+        Args:
+            item: Google search result item
+            job_function: Job function to search for (e.g., "Directeur Commercial")
+
+        Returns:
+            True if the result appears to match the job function, False otherwise
+        """
+        title = item.get("title", "").lower()
+        snippet = item.get("snippet", "").lower()
+        combined_text = f"{title} {snippet}"
+
+        job_lower = job_function.lower()
+
+        # Common job function synonyms/abbreviations
+        job_synonyms = {
+            "directeur": ["director", "dir", "directrice", "dg"],
+            "directrice": ["director", "dir", "directeur"],
+            "commercial": ["sales", "vente", "ventes", "commerciale"],
+            "commerciale": ["sales", "vente", "ventes", "commercial"],
+            "marketing": ["mkt", "mktg"],
+            "drh": ["directeur ressources humaines", "directrice ressources humaines", "hr director", "rh"],
+            "dsi": ["directeur systemes information", "it director", "cio"],
+            "daf": ["directeur administratif financier", "cfo", "finance director"],
+            "pdg": ["president directeur general", "ceo", "chief executive"],
+            "ceo": ["pdg", "president directeur general"],
+            "cto": ["directeur technique", "chief technology officer"],
+            "responsable": ["manager", "head", "chef", "resp"],
+            "achats": ["purchasing", "procurement", "achat", "buyer", "sourcing"],
+            "achat": ["purchasing", "procurement", "achats", "buyer", "sourcing"],
+            "technique": ["technical", "tech", "engineering"],
+            "general": ["generale", "général", "générale"],
+            "ressources": ["resources", "rh", "hr"],
+            "humaines": ["human", "hr", "rh"],
+            "financier": ["finance", "financial", "cfo"],
+            "informatique": ["it", "information", "systemes"],
+            "operations": ["ops", "opérations"],
+        }
+
+        # Words to ignore (common but not distinctive)
+        stopwords = {"de", "des", "du", "la", "le", "les", "et", "en", "au", "aux", "à"}
+
+        # Extract significant words from job function (at least 3 chars, not stopwords)
+        job_words = [w for w in job_lower.split() if len(w) >= 3 and w not in stopwords]
+
+        if not job_words:
+            return True  # If no significant words, accept all
+
+        # ALL significant words must match (either directly or via synonym)
+        for word in job_words:
+            word_found = False
+
+            # Direct match
+            if word in combined_text:
+                word_found = True
+            else:
+                # Check synonyms
+                if word in job_synonyms:
+                    for synonym in job_synonyms[word]:
+                        if synonym in combined_text:
+                            word_found = True
+                            break
+
+            # If this word was not found, the result doesn't match
+            if not word_found:
+                logger.debug(f"Job function word '{word}' not found in result")
+                return False
+
+        return True
 
 
 # =============================================================================
