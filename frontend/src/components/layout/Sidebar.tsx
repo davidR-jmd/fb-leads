@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Search, History, Settings, Linkedin } from 'lucide-react';
+import { Search, History, Settings, Linkedin, UserSearch } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { TRANSLATIONS } from '../../constants/translations';
 import { useAuth } from '../../hooks/useAuth';
@@ -19,6 +19,7 @@ interface NavItemConfig {
 const NAV_ITEMS: NavItemConfig[] = [
   { path: '/', icon: <Search size={20} />, label: TRANSLATIONS.nav.newSearch },
   { path: '/linkedin/search', icon: <Linkedin size={20} />, label: TRANSLATIONS.navExtended.linkedin },
+  { path: '/prospects', icon: <UserSearch size={20} />, label: TRANSLATIONS.navExtended.prospects },
   { path: '/historique', icon: <History size={20} />, label: TRANSLATIONS.nav.history },
   { path: '/configuration', icon: <Settings size={20} />, label: TRANSLATIONS.nav.settings },
 ];

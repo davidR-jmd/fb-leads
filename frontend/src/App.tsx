@@ -10,6 +10,7 @@ import Configuration from './pages/Configuration';
 import AdminUsers from './pages/AdminUsers';
 import LinkedInSettings from './pages/LinkedInSettings';
 import LinkedInSearch from './pages/LinkedInSearch';
+import ProspectFinder from './pages/ProspectFinder';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
@@ -32,6 +33,7 @@ function App() {
                 <Route path="/historique" element={<Historique />} />
                 <Route path="/configuration" element={<Configuration />} />
                 <Route path="/linkedin/search" element={<LinkedInSearch />} />
+                <Route path="/prospects" element={<ProspectFinder />} />
                 <Route
                   path="/admin/users"
                   element={
