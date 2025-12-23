@@ -40,7 +40,7 @@ export interface LinkedInSearchRequest {
 
 export interface LinkedInCompanySearchRequest {
   companies: string[]; // List of company names from Excel
-  keywords?: string; // Additional search keywords (e.g., "Directeur Marketing")
+  keywords?: string[]; // List of job functions/keywords to search (e.g., ["Directeur Marketing", "CEO"])
   limit_per_company?: number; // Default 10
 }
 

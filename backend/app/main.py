@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.auth.router import router as auth_router
 from app.admin.router import router as admin_router
 from app.linkedin.router import router as linkedin_router
+from app.prospects.router import router as prospects_router
 from app.linkedin.dependencies import initialize_linkedin_service, shutdown_linkedin_browser
 
 settings = get_settings()
@@ -52,6 +53,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(linkedin_router)
+app.include_router(prospects_router)
 
 
 @app.get("/")

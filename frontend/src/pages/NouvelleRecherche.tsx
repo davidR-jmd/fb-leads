@@ -17,14 +17,6 @@ const STEPS = [
   { number: 3, label: t.steps.synchronisation },
 ];
 
-const PROFILE_OPTIONS = [
-  { value: 'marketing_director', label: t.profiles.marketingDirector },
-  { value: 'sales_director', label: t.profiles.salesDirector },
-  { value: 'ceo', label: t.profiles.ceo },
-  { value: 'cto', label: t.profiles.cto },
-  { value: 'hr', label: t.profiles.hr },
-];
-
 export default function NouvelleRecherche() {
   const [currentStep, setCurrentStep] = useState(1);
   const [file, setFile] = useState<File | null>(null);
@@ -32,11 +24,11 @@ export default function NouvelleRecherche() {
     companyName: '',
     website: '',
   });
-  const [profile, setProfile] = useState('marketing_director');
   const [columns, setColumns] = useState<string[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [companies, setCompanies] = useState<string[]>([]);
-  const [keywords, setKeywords] = useState('');
+  // Dynamic keyword inputs - start with 2 empty inputs
+  const [keywords, setKeywords] = useState<string[]>(['', '']);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<LinkedInContact[]>([]);
@@ -275,6 +267,14 @@ export default function NouvelleRecherche() {
       return;
     }
 
+    // Get non-empty keywords
+    const activeKeywords = getActiveKeywords();
+
+    if (activeKeywords.length === 0) {
+      setSearchError("Veuillez saisir au moins une fonction à rechercher.");
+      return;
+    }
+
     setIsSearching(true);
     setSearchError(null);
     setSearchResults([]);
@@ -283,10 +283,10 @@ export default function NouvelleRecherche() {
     setCurrentStep(2);
 
     try {
-      // Start streaming search
+      // Start streaming search with multiple keywords
       const response = await linkedInApi.startSearchStream({
         companies,
-        keywords: keywords.trim(),
+        keywords: activeKeywords,
         limit_per_company: 10,
       });
 
@@ -320,6 +320,31 @@ export default function NouvelleRecherche() {
   };
 
   const columnOptions = columns.map((col) => ({ value: col, label: col }));
+
+  // Handle keyword input change with dynamic input addition
+  const handleKeywordChange = (index: number, value: string) => {
+    const newKeywords = [...keywords];
+    newKeywords[index] = value;
+
+    // If user is typing in the last input and it's not empty, add a new empty input
+    if (index === keywords.length - 1 && value.trim() !== '') {
+      newKeywords.push('');
+    }
+
+    setKeywords(newKeywords);
+  };
+
+  // Remove empty inputs except the last one (for UX cleanliness)
+  const handleKeywordBlur = (index: number) => {
+    // Keep at least 2 inputs, and always keep the last one even if empty
+    if (keywords.length > 2 && index < keywords.length - 1 && keywords[index].trim() === '') {
+      const newKeywords = keywords.filter((_, i) => i !== index);
+      setKeywords(newKeywords);
+    }
+  };
+
+  // Get non-empty keywords for search
+  const getActiveKeywords = () => keywords.filter(k => k.trim() !== '');
 
   return (
     <div>
@@ -473,25 +498,68 @@ export default function NouvelleRecherche() {
           </div>
         </div>
 
-        {/* Keywords Input */}
+        {/* Job Functions - Dynamic Inputs */}
         <div className="mb-6">
-          <h3 className="text-sm font-medium text-slate-700 mb-4">
-            Mots-clés de recherche LinkedIn
+          <h3 className="text-sm font-medium text-slate-700 mb-2">
+            Fonctions recherchées
           </h3>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-            <input
-              type="text"
-              value={keywords}
-              onChange={(e) => setKeywords(e.target.value)}
-              placeholder="Ex: Directeur Marketing, CEO, Commercial..."
-              className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              disabled={isSearching}
-            />
-          </div>
-          <p className="text-xs text-slate-500 mt-2">
-            Ces mots-clés seront combinés avec chaque entreprise pour la recherche LinkedIn
+          <p className="text-xs text-slate-500 mb-4">
+            Saisissez les fonctions à rechercher. Un nouveau champ apparaît automatiquement lorsque vous remplissez le dernier.
           </p>
+
+          <div className="space-y-3 max-w-lg">
+            {keywords.map((keyword, index) => (
+              <div key={index} className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  type="text"
+                  value={keyword}
+                  onChange={(e) => handleKeywordChange(index, e.target.value)}
+                  onBlur={() => handleKeywordBlur(index)}
+                  placeholder={index === 0 ? "Ex: Directeur Marketing" : index === 1 ? "Ex: CEO, Directeur Commercial..." : "Ajouter une autre fonction..."}
+                  className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  disabled={isSearching}
+                />
+                {/* Show numbered badge for filled inputs */}
+                {keyword.trim() && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-xs font-medium">
+                    {index + 1}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Selected functions summary */}
+          {getActiveKeywords().length > 0 && (
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800">
+                <span className="font-medium">Recherches prévues :</span>{' '}
+                {companies.length > 0 ? (
+                  <>
+                    {companies.length} entreprise{companies.length > 1 ? 's' : ''} × {' '}
+                    {getActiveKeywords().length} fonction{getActiveKeywords().length > 1 ? 's' : ''} = {' '}
+                    <span className="font-bold">
+                      {companies.length * getActiveKeywords().length} recherches
+                    </span>
+                  </>
+                ) : (
+                  'Importez un fichier pour voir le nombre de recherches'
+                )}
+              </p>
+              {/* List the keywords */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {getActiveKeywords().map((kw, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-white border border-blue-300 text-blue-700"
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Companies List */}
@@ -528,7 +596,10 @@ export default function NouvelleRecherche() {
         {/* Launch Button */}
         {(() => {
           const isLinkedInReady = linkedInStatus?.status === LinkedInStatus.CONNECTED || linkedInStatus?.status === LinkedInStatus.BUSY;
-          const isDisabled = !file || companies.length === 0 || isSearching || !isLinkedInReady;
+          const activeKeywords = getActiveKeywords();
+          const hasKeywords = activeKeywords.length > 0;
+          const isDisabled = !file || companies.length === 0 || isSearching || !isLinkedInReady || !hasKeywords;
+          const totalSearches = companies.length * activeKeywords.length;
 
           return (
             <button
@@ -539,17 +610,22 @@ export default function NouvelleRecherche() {
               {isSearching ? (
                 <>
                   <Loader2 className="animate-spin" size={20} />
-                  Recherche en cours... ({companiesSearched}/{totalCompanies} entreprises)
+                  Recherche en cours... ({companiesSearched}/{totalCompanies})
                 </>
               ) : !isLinkedInReady ? (
                 <>
                   <AlertCircle size={20} />
                   LinkedIn non connecté
                 </>
+              ) : !hasKeywords ? (
+                <>
+                  <AlertCircle size={20} />
+                  Saisissez au moins une fonction
+                </>
               ) : (
                 <>
                   <Search size={20} />
-                  Lancer la recherche LinkedIn
+                  Lancer {totalSearches} recherche{totalSearches > 1 ? 's' : ''} LinkedIn
                 </>
               )}
             </button>

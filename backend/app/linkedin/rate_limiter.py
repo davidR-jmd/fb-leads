@@ -208,6 +208,16 @@ class LinkedInRateLimiter:
         )
         logger.info(f"Session ended. Cooldown until {cooldown_until}")
 
+    async def reset_limits(self) -> dict[str, Any]:
+        """Reset all rate limit counters."""
+        data = await self._reset_rate_data()
+        logger.info("Rate limits have been reset")
+        return {
+            "message": "Rate limits reset successfully",
+            "searches_today": 0,
+            "searches_this_hour": 0,
+        }
+
     async def get_status(self) -> dict[str, Any]:
         """Get current rate limit status."""
         data = await self._get_rate_data()

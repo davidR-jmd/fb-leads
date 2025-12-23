@@ -143,4 +143,11 @@ export const linkedInApi = {
     const response = await apiClient.get<RateLimitStatus>('/linkedin/rate-limit-status');
     return response.data;
   },
+
+  /**
+   * Reset rate limit counters (admin only)
+   */
+  resetRateLimits: async (): Promise<void> => {
+    await apiClient.post('/linkedin/reset-rate-limits');
+  },
 };

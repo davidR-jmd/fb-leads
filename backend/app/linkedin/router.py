@@ -343,7 +343,7 @@ async def start_search_stream(
 async def run_background_search(
     session_id: str,
     companies: list[str],
-    keywords: str,
+    keywords: list[str],
     limit_per_company: int,
     db: AsyncIOMotorDatabase,
     service: LinkedInService,
@@ -358,67 +358,76 @@ async def run_background_search(
     rate_limiter = get_rate_limiter(db)
     searches_done = 0
 
+    # Normalize keywords - ensure we have at least one (empty string means search by company only)
+    if not keywords:
+        keywords = [""]
+    keywords = [k.strip() for k in keywords if k.strip()] or [""]
+
+    total_searches = len(companies) * len(keywords)
+
     try:
         for company in companies:
-            # Check rate limit before each search
-            can_search, reason = await rate_limiter.can_search()
-            if not can_search:
-                logger.warning(f"Rate limit reached: {reason}. Pausing search.")
-                # Wait for cooldown and retry
-                await asyncio.sleep(60)  # Wait 1 minute then check again
+            for keyword in keywords:
+                # Check rate limit before each search
                 can_search, reason = await rate_limiter.can_search()
                 if not can_search:
-                    logger.error(f"Still rate limited after wait: {reason}")
-                    await search_repo.complete_session(session_id, "rate_limited")
-                    return
+                    logger.warning(f"Rate limit reached: {reason}. Pausing search.")
+                    # Wait for cooldown and retry
+                    await asyncio.sleep(60)  # Wait 1 minute then check again
+                    can_search, reason = await rate_limiter.can_search()
+                    if not can_search:
+                        logger.error(f"Still rate limited after wait: {reason}")
+                        await search_repo.complete_session(session_id, "rate_limited")
+                        return
 
-            # Build search query
-            if keywords.strip():
-                query = f"{keywords.strip()} {company}"
-            else:
-                query = company
+                # Build search query
+                if keyword:
+                    query = f"{keyword} {company}"
+                else:
+                    query = company
 
-            logger.info(f"Searching: {query}")
+                logger.info(f"Searching ({searches_done + 1}/{total_searches}): {query}")
 
-            try:
-                contacts = await http_client.search_people(
-                    query,
-                    limit=limit_per_company,
-                    company_filter=company,
-                    keywords_filter=keywords if keywords.strip() else None,
-                )
-
-                # Record search for rate limiting
-                await rate_limiter.record_search()
-                searches_done += 1
-
-                # Convert to SearchResultDocument
-                results = [
-                    SearchResultDocument(
-                        name=c.name,
-                        title=c.title,
-                        company=c.company or company,
-                        location=c.location,
-                        profile_url=c.profile_url,
-                        searched_company=company,
-                        searched_keywords=keywords,
+                try:
+                    contacts = await http_client.search_people(
+                        query,
+                        limit=limit_per_company,
+                        company_filter=company,
+                        keywords_filter=keyword if keyword else None,
                     )
-                    for c in contacts
-                ]
 
-                # Save results to DB
-                await search_repo.add_results(session_id, results, company)
+                    # Record search for rate limiting
+                    await rate_limiter.record_search()
+                    searches_done += 1
 
-            except Exception as e:
-                logger.error(f"Error searching {company}: {e}")
+                    # Convert to SearchResultDocument
+                    results = [
+                        SearchResultDocument(
+                            name=c.name,
+                            title=c.title,
+                            company=c.company or company,
+                            location=c.location,
+                            profile_url=c.profile_url,
+                            searched_company=company,
+                            searched_keywords=keyword,
+                        )
+                        for c in contacts
+                    ]
 
-            # Human-like delay between searches to avoid rate limiting
-            delay = random.uniform(2.0, 5.0)
-            # Occasional longer pause like a human taking a break
-            if searches_done % 5 == 0:
-                delay += random.uniform(3.0, 8.0)
-                logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
-            await asyncio.sleep(delay)
+                    # Save results to DB
+                    await search_repo.add_results(session_id, results, company)
+
+                except Exception as e:
+                    logger.error(f"Error searching {query}: {e}")
+
+                # Human-like delay between searches to avoid rate limiting
+                if total_searches > 1:
+                    delay = random.uniform(2.0, 5.0)
+                    # Occasional longer pause like a human taking a break
+                    if searches_done % 5 == 0:
+                        delay += random.uniform(3.0, 8.0)
+                        logger.info(f"Taking a longer break ({delay:.1f}s) after {searches_done} searches")
+                    await asyncio.sleep(delay)
 
         # Mark as completed
         await search_repo.complete_session(session_id, "completed")
@@ -441,13 +450,20 @@ async def get_search_session_status(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Handle keywords (can be list or string)
+    keywords = session.get("keywords", [])
+    if isinstance(keywords, list):
+        keywords_str = ", ".join(keywords)
+    else:
+        keywords_str = keywords or ""
+
     return SearchSessionStatusResponse(
         session_id=session_id,
         status=session.get("status", "unknown"),
         companies_searched=session.get("companies_searched", 0),
         total_companies=session.get("total_companies", 0),
         total_results=len(session.get("results", [])),
-        keywords=session.get("keywords", ""),
+        keywords=keywords_str,
         created_at=str(session.get("created_at", "")),
     )
 
@@ -560,3 +576,16 @@ async def get_rate_limit_status(
     """
     rate_limiter = get_rate_limiter(db)
     return await rate_limiter.get_status()
+
+
+@router.post("/reset-rate-limits")
+async def reset_rate_limits(
+    _: Annotated[dict, Depends(get_current_admin_user)],
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_database)],
+) -> dict:
+    """
+    Reset rate limit counters.
+    Requires admin role.
+    """
+    rate_limiter = get_rate_limiter(db)
+    return await rate_limiter.reset_limits()

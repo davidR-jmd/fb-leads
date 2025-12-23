@@ -132,5 +132,6 @@ export const TRANSLATIONS = {
   // Navigation (extended)
   navExtended: {
     linkedin: 'LinkedIn',
+    prospects: 'Prospect Finder',
   },
 } as const;

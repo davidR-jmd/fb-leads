@@ -19,11 +19,19 @@ class SearchResultsRepository:
         self,
         user_id: str,
         companies: list[str],
-        keywords: str = "",
+        keywords: list[str] | None = None,
     ) -> str:
         """Create a new search session and return its ID."""
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
+
+        # Normalize keywords
+        if keywords is None:
+            keywords = []
+        keywords = [k.strip() for k in keywords if k.strip()]
+
+        # Calculate total searches (companies × keywords)
+        total_searches = len(companies) * max(len(keywords), 1)
 
         document = {
             "_id": session_id,
@@ -33,7 +41,7 @@ class SearchResultsRepository:
             "status": "in_progress",
             "results": [],
             "companies_searched": 0,
-            "total_companies": len(companies),
+            "total_companies": total_searches,  # Now represents total searches (companies × keywords)
             "created_at": now,
             "updated_at": now,
         }
@@ -113,7 +121,7 @@ class SearchResultsRepository:
         self,
         user_id: str,
         companies: list[str],
-        keywords: str,
+        keywords: list[str] | None = None,
         max_age_hours: int = 24,
     ) -> dict[str, Any] | None:
         """Find a cached search with the same parameters."""
@@ -121,19 +129,28 @@ class SearchResultsRepository:
 
         min_date = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
-        # Sort companies for consistent comparison
+        # Normalize and sort for consistent comparison
         sorted_companies = sorted(companies)
+        if keywords is None:
+            keywords = []
+        sorted_keywords = sorted([k.strip() for k in keywords if k.strip()])
 
         # Find completed searches with same params
         cursor = self._collection.find({
             "user_id": user_id,
-            "keywords": keywords,
             "status": "completed",
             "created_at": {"$gte": min_date},
         })
 
         async for session in cursor:
-            if sorted(session.get("companies", [])) == sorted_companies:
+            session_companies = sorted(session.get("companies", []))
+            session_keywords = session.get("keywords", [])
+            # Handle both old string format and new list format
+            if isinstance(session_keywords, str):
+                session_keywords = [session_keywords] if session_keywords else []
+            session_keywords_sorted = sorted([k.strip() for k in session_keywords if k.strip()])
+
+            if session_companies == sorted_companies and session_keywords_sorted == sorted_keywords:
                 return session
 
         return None

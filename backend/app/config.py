@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     linkedin_browser_profile_path: str = "./browser-profiles/linkedin"
     linkedin_headless: bool = True  # Set to False to see browser window (for debugging)
 
+    # Pappers API (French company data)
+    pappers_api_key: str = ""
+
+    # Google Custom Search API (for finding LinkedIn profiles)
+    google_search_api_key: str = ""
+    google_search_cx: str = ""  # Custom Search Engine ID
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
